@@ -1,0 +1,6 @@
+FROM python:3.9-slim
+WORKDIR /app
+RUN pip install flask flask-cors
+COPY dashboard_server.py .
+COPY dashboard.html .
+CMD ["python", "dashboard_server.py"]

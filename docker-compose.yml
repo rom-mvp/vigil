@@ -1,0 +1,20 @@
+version: '3.8'
+services:
+  vigil-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "3000:3000"
+    networks:
+      - vigil-net
+  vigil-gateway:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_SERVER_URL=http://vigil-dashboard:3000/ingest
+    networks:
+      - vigil-net
+networks:
+  vigil-net:
