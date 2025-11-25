@@ -13,12 +13,37 @@
         <div class="h-8 w-8 rounded-full bg-indigo-500 flex items-center justify-center text-xs font-bold">VG</div>
         <div>
           <div class="font-semibold">Vigil Console</div>
-          <div class="text-xs text-slate-400">AgentShield Trust, Policy & Identity</div>
+          <div class="text-xs text-slate-400">AgentShield Trust, Policy &amp; Identity</div>
         </div>
       </div>
-      <div class="text-xs text-slate-400">
-        Environment:
-        <span id="env-label" class="text-indigo-300">Local Dev</span>
+
+      <div class="flex items-center gap-4 text-xs text-slate-300">
+        <!-- Environment selector -->
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">Env</span>
+          <select
+            id="env-select"
+            class="bg-slate-900 border border-slate-700 rounded-full px-2 py-1 text-xs text-slate-100"
+            onchange="onEnvChange()"
+          >
+            <option value="local">Local</option>
+            <option value="staging">Staging</option>
+            <option value="prod">Prod</option>
+          </select>
+          <span id="env-label" class="text-indigo-300 text-[10px]"></span>
+        </div>
+
+        <!-- Tenant selector -->
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">Tenant</span>
+          <input
+            id="tenant-input"
+            type="text"
+            class="bg-slate-900 border border-slate-700 rounded-full px-2 py-1 text-xs text-slate-100 w-32"
+            placeholder="dev-tenant"
+            onblur="onTenantChange()"
+          />
+        </div>
       </div>
     </header>
 
@@ -152,18 +177,111 @@
   </div>
 
   <script>
-    // ---- CONFIG: point these to your AgentShield env ----
-    const TENANT_ID = "dev-tenant"; // or come from auth later
+    // ---- ENV & TENANT CONFIG ----
 
-    const AUDIT_API     = "http://localhost:8200"; // /api/overview
-    const POLICY_API    = "http://localhost:8100"; // /tenants/{tenant_id}/policies
-    const IDENTITY_API  = "http://localhost:8300"; // /tenants/{tenant_id}/agents
-    const PROTOCOL_API  = "http://localhost:8400"; // /trust-graph
+    const DEFAULT_CONFIG = {
+      env: "local",
+      tenantId: "dev-tenant",
+    };
+
+    // Map environments → base URLs for each service
+    const ENV_CONFIG = {
+      local: {
+        label: "Local Dev",
+        AUDIT_API: "http://localhost:8200",
+        POLICY_API: "http://localhost:8100",
+        IDENTITY_API: "http://localhost:8300",
+        PROTOCOL_API: "http://localhost:8400",
+      },
+      staging: {
+        label: "Staging",
+        AUDIT_API: "https://staging-audit.agentshield.yourdomain.com",
+        POLICY_API: "https://staging-policy.agentshield.yourdomain.com",
+        IDENTITY_API: "https://staging-identity.agentshield.yourdomain.com",
+        PROTOCOL_API: "https://staging-protocol.agentshield.yourdomain.com",
+      },
+      prod: {
+        label: "Production",
+        AUDIT_API: "https://audit.agentshield.yourdomain.com",
+        POLICY_API: "https://policy.agentshield.yourdomain.com",
+        IDENTITY_API: "https://identity.agentshield.yourdomain.com",
+        PROTOCOL_API: "https://protocol.agentshield.yourdomain.com",
+      },
+    };
+
+    function loadConsoleConfig() {
+      try {
+        const raw = localStorage.getItem("vigil_console_config");
+        if (!raw) return { ...DEFAULT_CONFIG };
+        const parsed = JSON.parse(raw);
+        return {
+          env: parsed.env || DEFAULT_CONFIG.env,
+          tenantId: parsed.tenantId || DEFAULT_CONFIG.tenantId,
+        };
+      } catch (e) {
+        return { ...DEFAULT_CONFIG };
+      }
+    }
+
+    function saveConsoleConfig(cfg) {
+      localStorage.setItem("vigil_console_config", JSON.stringify(cfg));
+    }
+
+    function getCurrentEnvConfig() {
+      const cfg = loadConsoleConfig();
+      return { cfg, envCfg: ENV_CONFIG[cfg.env] || ENV_CONFIG.local };
+    }
+
+    function getBaseUrl(serviceName) {
+      const { envCfg } = getCurrentEnvConfig();
+      return envCfg[serviceName];
+    }
+
+    function getTenantId() {
+      const { cfg } = getCurrentEnvConfig();
+      return cfg.tenantId;
+    }
+
+    // Called when env dropdown changes
+    function onEnvChange() {
+      const select = document.getElementById("env-select");
+      const env = select.value;
+      const cfg = loadConsoleConfig();
+      cfg.env = env;
+      saveConsoleConfig(cfg);
+      updateHeaderFromConfig();
+      // reload current tab data after env change
+      reloadActiveTab();
+    }
+
+    // Called when tenant input loses focus
+    function onTenantChange() {
+      const input = document.getElementById("tenant-input");
+      const tenantId = input.value.trim() || DEFAULT_CONFIG.tenantId;
+      const cfg = loadConsoleConfig();
+      cfg.tenantId = tenantId;
+      saveConsoleConfig(cfg);
+      updateHeaderFromConfig();
+      // reload current tab data after tenant change
+      reloadActiveTab();
+    }
+
+    function updateHeaderFromConfig() {
+      const { cfg, envCfg } = getCurrentEnvConfig();
+      const envLabelEl = document.getElementById("env-label");
+      const envSelect = document.getElementById("env-select");
+      const tenantInput = document.getElementById("tenant-input");
+
+      if (envLabelEl) envLabelEl.textContent = envCfg.label;
+      if (envSelect) envSelect.value = cfg.env;
+      if (tenantInput) tenantInput.value = cfg.tenantId;
+    }
 
     // ---- Overview ----
     async function loadOverview() {
       try {
-        const res = await fetch(`${AUDIT_API}/api/overview`);
+        const auditApi = getBaseUrl("AUDIT_API");
+        const res = await fetch(`${auditApi}/api/overview`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const stats = data.stats || {};
@@ -211,7 +329,9 @@
     // ---- Policies ----
     async function loadPolicies() {
       try {
-        const res = await fetch(`${POLICY_API}/tenants/${TENANT_ID}/policies`);
+        const tenantId = getTenantId();
+        const policyApi = getBaseUrl("POLICY_API");
+        const res = await fetch(`${policyApi}/tenants/${encodeURIComponent(tenantId)}/policies`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const policies = await res.json();
         const tbody = document.getElementById("policies-table-body");
@@ -244,6 +364,8 @@
     }
 
     function openCreatePolicyModal() {
+      const tenantId = getTenantId();
+      const policyApi = getBaseUrl("POLICY_API");
       const name = prompt("Policy name (e.g. 'Deny data deletion')");
       if (!name) return;
       const description = prompt("Description");
@@ -254,7 +376,7 @@
         priority: 100,
         rules: [],
       };
-      fetch(`${POLICY_API}/tenants/${TENANT_ID}/policies`, {
+      fetch(`${policyApi}/tenants/${encodeURIComponent(tenantId)}/policies`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -266,7 +388,9 @@
     // ---- Agents ----
     async function loadAgents() {
       try {
-        const res = await fetch(`${IDENTITY_API}/tenants/${TENANT_ID}/agents`);
+        const tenantId = getTenantId();
+        const identityApi = getBaseUrl("IDENTITY_API");
+        const res = await fetch(`${identityApi}/tenants/${encodeURIComponent(tenantId)}/agents`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const agents = await res.json();
         const tbody = document.getElementById("agents-table-body");
@@ -303,6 +427,8 @@
     }
 
     function openCreateAgentModal() {
+      const tenantId = getTenantId();
+      const identityApi = getBaseUrl("IDENTITY_API");
       const agentId = prompt("Agent ID (e.g. 'support-bot')");
       if (!agentId) return;
       const roles = prompt("Roles (comma separated, e.g. 'support,read-only')");
@@ -310,7 +436,7 @@
         agent_id: agentId,
         roles: roles ? roles.split(",").map(r => r.trim()) : [],
       };
-      fetch(`${IDENTITY_API}/tenants/${TENANT_ID}/agents`, {
+      fetch(`${identityApi}/tenants/${encodeURIComponent(tenantId)}/agents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -322,7 +448,8 @@
     // ---- Network ----
     async function loadNetwork() {
       try {
-        const res = await fetch(`${PROTOCOL_API}/trust-graph`);
+        const protocolApi = getBaseUrl("PROTOCOL_API");
+        const res = await fetch(`${protocolApi}/trust-graph`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const items = await res.json();
         const tbody = document.getElementById("network-table-body");
@@ -355,6 +482,19 @@
     }
 
     // ---- Tabs & helpers ----
+    function reloadActiveTab() {
+      const active = document.querySelector(".tab-button.bg-slate-800");
+      if (!active) {
+        setActiveTab("overview");
+        return;
+      }
+      const tabName = active.dataset.tab;
+      if (tabName === "overview") loadOverview();
+      if (tabName === "policies") loadPolicies();
+      if (tabName === "agents") loadAgents();
+      if (tabName === "network") loadNetwork();
+    }
+
     function setActiveTab(tabName) {
       document.querySelectorAll(".tab-panel").forEach(el => {
         el.classList.toggle("hidden", el.id !== `tab-${tabName}`);
@@ -383,6 +523,9 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
+      // initialize header from stored config
+      updateHeaderFromConfig();
+
       document.querySelectorAll(".tab-button").forEach(btn => {
         btn.addEventListener("click", () => setActiveTab(btn.dataset.tab));
       });
