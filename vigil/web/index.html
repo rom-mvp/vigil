@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Vigil by AgentShield</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-50">
+  <div class="min-h-screen flex flex-col">
+    <!-- Header -->
+    <header class="border-b border-slate-800 px-8 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="h-8 w-8 rounded-full bg-indigo-500 flex items-center justify-center text-xs font-bold">VG</div>
+        <div>
+          <div class="font-semibold">Vigil Console</div>
+          <div class="text-xs text-slate-400">AgentShield Trust, Policy & Identity</div>
+        </div>
+      </div>
+      <div class="text-xs text-slate-400">
+        Environment:
+        <span id="env-label" class="text-indigo-300">Local Dev</span>
+      </div>
+    </header>
+
+    <!-- Main -->
+    <main class="flex-1 px-8 py-6 space-y-6">
+      <!-- Tabs -->
+      <nav class="flex gap-2 border-b border-slate-800 pb-2 text-xs">
+        <button class="tab-button px-3 py-1 rounded-full bg-slate-800 text-slate-50" data-tab="overview">Overview</button>
+        <button class="tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60" data-tab="policies">Policies</button>
+        <button class="tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60" data-tab="agents">Agents</button>
+        <button class="tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60" data-tab="network">Network</button>
+      </nav>
+
+      <!-- Overview Tab -->
+      <section id="tab-overview" class="tab-panel space-y-4">
+        <h2 class="text-sm font-semibold text-slate-200">Runtime Overview</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400">Total Requests</div>
+            <div id="stat-total-requests" class="mt-2 text-2xl font-semibold text-slate-50">—</div>
+          </div>
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400">Blocked Attacks</div>
+            <div id="stat-blocked-attacks" class="mt-2 text-2xl font-semibold text-rose-400">—</div>
+          </div>
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400">PII Redactions</div>
+            <div id="stat-redacted-events" class="mt-2 text-2xl font-semibold text-emerald-400">—</div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between mt-4">
+          <h3 class="text-xs font-semibold text-slate-300">Recent Events</h3>
+          <button
+            class="text-xs px-2 py-1 rounded-full border border-slate-700 hover:border-slate-500 text-slate-300"
+            onclick="loadOverview()"
+          >
+            Refresh
+          </button>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-900 border-b border-slate-800">
+              <tr>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Time</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Tenant</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Agent</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Phase</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Blocked</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">PII</th>
+              </tr>
+            </thead>
+            <tbody id="events-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Policies Tab -->
+      <section id="tab-policies" class="tab-panel hidden space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-200">Policies</h2>
+          <button
+            class="text-xs px-3 py-1 rounded-full bg-indigo-500 hover:bg-indigo-400 text-slate-50"
+            onclick="openCreatePolicyModal()"
+          >
+            + New Policy
+          </button>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-900 border-b border-slate-800">
+              <tr>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Name</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Description</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Priority</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Rules</th>
+              </tr>
+            </thead>
+            <tbody id="policies-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Agents Tab -->
+      <section id="tab-agents" class="tab-panel hidden space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-200">Agents</h2>
+          <button
+            class="text-xs px-3 py-1 rounded-full bg-indigo-500 hover:bg-indigo-400 text-slate-50"
+            onclick="openCreateAgentModal()"
+          >
+            + New Agent
+          </button>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-900 border-b border-slate-800">
+              <tr>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Agent ID</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Roles</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">API Key</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Active</th>
+              </tr>
+            </thead>
+            <tbody id="agents-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Network Tab -->
+      <section id="tab-network" class="tab-panel hidden space-y-4">
+        <h2 class="text-sm font-semibold text-slate-200">Agent Identity Network</h2>
+        <p class="text-xs text-slate-400">
+          Early view of cross-tenant trust relationships for Phase 3.
+        </p>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-900 border-b border-slate-800">
+              <tr>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">From Tenant</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">To Tenant</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Trust Score</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Last Updated</th>
+              </tr>
+            </thead>
+            <tbody id="network-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    // ---- CONFIG: point these to your AgentShield env ----
+    const TENANT_ID = "dev-tenant"; // or come from auth later
+
+    const AUDIT_API     = "http://localhost:8200"; // /api/overview
+    const POLICY_API    = "http://localhost:8100"; // /tenants/{tenant_id}/policies
+    const IDENTITY_API  = "http://localhost:8300"; // /tenants/{tenant_id}/agents
+    const PROTOCOL_API  = "http://localhost:8400"; // /trust-graph
+
+    // ---- Overview ----
+    async function loadOverview() {
+      try {
+        const res = await fetch(`${AUDIT_API}/api/overview`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const stats = data.stats || {};
+        const events = data.recent_events || [];
+
+        document.getElementById("stat-total-requests").innerText = stats.total_requests ?? "0";
+        document.getElementById("stat-blocked-attacks").innerText = stats.blocked_attacks ?? "0";
+        document.getElementById("stat-redacted-events").innerText = stats.redacted_events ?? "0";
+
+        const tbody = document.getElementById("events-table-body");
+        tbody.innerHTML = "";
+
+        if (!events.length) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="6" class="px-4 py-4 text-center text-slate-500">
+              No events yet. Send a request through the AgentShield gateway.
+            </td>`;
+          tbody.appendChild(row);
+          return;
+        }
+
+        for (const ev of events) {
+          const row = document.createElement("tr");
+          row.className = "border-t border-slate-800/60";
+          row.innerHTML = `
+            <td class="px-4 py-2 text-slate-300">${escapeHtml(ev.timestamp)}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(ev.tenant_id || "-")}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(ev.agent_id || "-")}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(ev.phase || "-")}</td>
+            <td class="px-4 py-2">
+              ${ev.blocked
+                ? '<span class="text-rose-400 font-semibold">Yes</span>'
+                : '<span class="text-emerald-400">No</span>'}
+            </td>
+            <td class="px-4 py-2 text-slate-400">${ev.pii_event_count || 0}</td>
+          `;
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        console.error("Failed to load overview", err);
+      }
+    }
+
+    // ---- Policies ----
+    async function loadPolicies() {
+      try {
+        const res = await fetch(`${POLICY_API}/tenants/${TENANT_ID}/policies`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const policies = await res.json();
+        const tbody = document.getElementById("policies-table-body");
+        tbody.innerHTML = "";
+
+        if (!policies.length) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="4" class="px-4 py-4 text-center text-slate-500">
+              No policies yet. Click "New Policy" to create one.
+            </td>`;
+          tbody.appendChild(row);
+          return;
+        }
+
+        for (const p of policies) {
+          const row = document.createElement("tr");
+          row.className = "border-t border-slate-800/60";
+          row.innerHTML = `
+            <td class="px-4 py-2 text-slate-300">${escapeHtml(p.name)}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(p.description || "")}</td>
+            <td class="px-4 py-2 text-slate-400">${p.priority ?? 0}</td>
+            <td class="px-4 py-2 text-slate-400">${(p.rules || []).length}</td>
+          `;
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        console.error("Failed to load policies", err);
+      }
+    }
+
+    function openCreatePolicyModal() {
+      const name = prompt("Policy name (e.g. 'Deny data deletion')");
+      if (!name) return;
+      const description = prompt("Description");
+      const body = {
+        id: `pol_${Date.now()}`,
+        name,
+        description: description || "",
+        priority: 100,
+        rules: [],
+      };
+      fetch(`${POLICY_API}/tenants/${TENANT_ID}/policies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then(() => loadPolicies())
+        .catch(err => console.error("Failed to create policy", err));
+    }
+
+    // ---- Agents ----
+    async function loadAgents() {
+      try {
+        const res = await fetch(`${IDENTITY_API}/tenants/${TENANT_ID}/agents`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const agents = await res.json();
+        const tbody = document.getElementById("agents-table-body");
+        tbody.innerHTML = "";
+
+        if (!agents.length) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="4" class="px-4 py-4 text-center text-slate-500">
+              No agents yet. Click "New Agent" to create one.
+            </td>`;
+          tbody.appendChild(row);
+          return;
+        }
+
+        for (const a of agents) {
+          const row = document.createElement("tr");
+          row.className = "border-t border-slate-800/60";
+          row.innerHTML = `
+            <td class="px-4 py-2 text-slate-300">${escapeHtml(a.agent_id)}</td>
+            <td class="px-4 py-2 text-slate-400">${(a.roles || []).join(", ")}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(a.api_key || "hidden")}</td>
+            <td class="px-4 py-2">
+              ${a.active
+                ? '<span class="text-emerald-400">Active</span>'
+                : '<span class="text-slate-500">Disabled</span>'}
+            </td>
+          `;
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        console.error("Failed to load agents", err);
+      }
+    }
+
+    function openCreateAgentModal() {
+      const agentId = prompt("Agent ID (e.g. 'support-bot')");
+      if (!agentId) return;
+      const roles = prompt("Roles (comma separated, e.g. 'support,read-only')");
+      const payload = {
+        agent_id: agentId,
+        roles: roles ? roles.split(",").map(r => r.trim()) : [],
+      };
+      fetch(`${IDENTITY_API}/tenants/${TENANT_ID}/agents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then(() => loadAgents())
+        .catch(err => console.error("Failed to create agent", err));
+    }
+
+    // ---- Network ----
+    async function loadNetwork() {
+      try {
+        const res = await fetch(`${PROTOCOL_API}/trust-graph`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const items = await res.json();
+        const tbody = document.getElementById("network-table-body");
+        tbody.innerHTML = "";
+
+        if (!items.length) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="4" class="px-4 py-4 text-center text-slate-500">
+              No cross-tenant relationships recorded yet.
+            </td>`;
+          tbody.appendChild(row);
+          return;
+        }
+
+        for (const tr of items) {
+          const row = document.createElement("tr");
+          row.className = "border-t border-slate-800/60";
+          row.innerHTML = `
+            <td class="px-4 py-2 text-slate-300">${escapeHtml(tr.from_tenant)}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(tr.to_tenant)}</td>
+            <td class="px-4 py-2 text-slate-400">${tr.score ?? 0}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(tr.last_updated || "-")}</td>
+          `;
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        console.error("Failed to load network", err);
+      }
+    }
+
+    // ---- Tabs & helpers ----
+    function setActiveTab(tabName) {
+      document.querySelectorAll(".tab-panel").forEach(el => {
+        el.classList.toggle("hidden", el.id !== `tab-${tabName}`);
+      });
+      document.querySelectorAll(".tab-button").forEach(btn => {
+        const active = btn.dataset.tab === tabName;
+        btn.className = active
+          ? "tab-button px-3 py-1 rounded-full bg-slate-800 text-slate-50"
+          : "tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60";
+      });
+
+      if (tabName === "overview") loadOverview();
+      if (tabName === "policies") loadPolicies();
+      if (tabName === "agents") loadAgents();
+      if (tabName === "network") loadNetwork();
+    }
+
+    function escapeHtml(str) {
+      if (str == null) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      document.querySelectorAll(".tab-button").forEach(btn => {
+        btn.addEventListener("click", () => setActiveTab(btn.dataset.tab));
+      });
+      setActiveTab("overview");
+    });
+  </script>
+</body>
+</html>
