@@ -1,67 +1,44 @@
-# 🛡️ Vigil (AgentShield) v0.3 Enterprise
+# Vigil
 
-**The Identity-First Security Gateway for AI Agents.**
+Vigil is the **public console and example client** for [AgentShield](https://your-site-here).
 
-Vigil is a transparent proxy that sits between your code and the LLM. It blocks attacks and redacts PII *before* data leaves your infrastructure.
+It gives security and platform teams a single pane of glass to:
 
-**New in v0.3:**
-* 🧠 **Context-Aware NLP:** Uses Microsoft Presidio & Spacy to detect PII (Names, Locations) without regex.
-* 🔌 **Transparent Gateway:** Drop-in replacement for OpenAI. Just change `base_url`.
-* 📊 **Enterprise Dashboard:** Real-time visibility into all attacks and PII redactions via Docker Compose.
+- See **all agent traffic** (requests, responses, blocks, PII redactions)
+- Manage **policies** across tenants and environments
+- Manage **non-human identities** (agents & their API keys)
+- Preview the **Agent Identity Network** (Phase 3 vision)
+
+Under the hood, Vigil is a thin UI that talks to your **AgentShield** services over HTTP.
 
 ---
 
-## ⚡ Quick Start (Enterprise Fleet)
+## Prerequisites
 
-Run the full stack (Gateway + Dashboard) locally.
+You need an AgentShield environment running somewhere (local, staging, or prod):
 
-### 1. Launch the Fleet
+- `gateway` (port `8000` by default)
+- `audit-reporter` (port `8200`)
+- `policy-hub` (port `8100`)
+- `identity-service` (port `8300`)
+- `protocol-hub` (port `8400`, optional)
+
+> See the AgentShield repo README for how to start these.
+
+For Vigil itself:
+
+- Python 3.11+
+- `pip` / `venv`
+
+---
+
+## Install & Run (Local Dev)
+
+From the Vigil repo root:
+
 ```bash
-# Starts Gateway (Port 8000) and Dashboard (Port 3000)
-docker-compose up --build
-```
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-### 2. Access the Command Center
-Open your browser to: **[http://localhost:3000](http://localhost:3000)**
-* Login Key: `sk_admin`
-
-### 3. Connect your Agent
-Vigil is compatible with the official OpenAI SDK. 
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8000/v1",  # Point to Vigil Gateway
-    api_key="sk-dummy-key"                # No real key needed for local test
-)
-
-# This request is automatically scanned, redacted, and logged to your Dashboard
-response = client.chat.completions.create(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "My name is Sarah and I live in London."}]
-)
-
-print(response.choices[0].message.content)
-# Output: "Vigil accepted: 'My name is <REDACTED_PERSON> and I live in <REDACTED_LOCATION>.'"
-```
-
----
-
-## 🛡️ Features
-
-| Feature | Description | Tech Stack |
-| :--- | :--- | :--- |
-| **Smart PII Redaction** | Detects Names, Locations, Phones, Emails using NLP. | Presidio + Spacy |
-| **Heuristic Firewall** | Blocks prompt injections (e.g., "Ignore instructions"). | Regex Engine |
-| **Transparent Proxy** | Mimics OpenAI API (`/v1/chat/completions`). | Flask |
-| **Enterprise Dashboard** | Aggregates logs from all gateways in real-time. | React + Flask |
-| **Privacy First** | Runs 100% offline. No data egress. | Docker |
-
----
-
-## 🤝 Contributing
-
-1.  Fork the repo.
-2.  `docker-compose up --build`
-3.  Create a PR with your new detection rules!
+pip install -r requirements.txt
+python web/server.py
