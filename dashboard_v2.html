@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vigil Console v2.0 - AgentShield Analytics</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        body { 
+            background: linear-gradient(135deg, #0b0c15 0%, #1a1b2e 100%);
+            color: #ffffff; 
+            font-family: 'Inter', sans-serif; 
+        }
+        .glass { 
+            background: rgba(255, 255, 255, 0.03); 
+            border: 1px solid rgba(255, 255, 255, 0.1); 
+            backdrop-filter: blur(10px); 
+        }
+        .metric-card {
+            transition: all 0.3s ease;
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+        }
+        .severity-critical { border-left: 4px solid #ef4444; }
+        .severity-high { border-left: 4px solid #f59e0b; }
+        .severity-medium { border-left: 4px solid #3b82f6; }
+        .severity-low { border-left: 4px solid #10b981; }
+        .pulse-dot {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+        .tab-active {
+            border-bottom: 2px solid #3b82f6;
+            color: #3b82f6;
+        }
+    </style>
+</head>
+<body class="antialiased">
+    <div id="root"></div>
+
+    <script>
+        const API_BASE = "";  // Local mode
+        const REFRESH_INTERVAL = 5000; // 5 seconds
+
+        // State management
+        let state = {
+            authenticated: API_BASE === "" ? true : false, // Auto-authenticate for local mode
+            activeTab: 'overview',
+            data: {
+                status: null,
+                stats: null,
+                classifier: null,
+                scanner: null,
+                registry: null,
+                supplyChain: null,
+                threats: null,
+                logs: null
+            }
+        };
+
+        // API Helper
+        async function apiCall(endpoint) {
+            const res = await fetch(`${API_BASE}/api/${endpoint}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return await res.json();
+        }
+
+        // Data fetching
+        async function fetchAllData() {
+            try {
+                const [status, stats, classifier, scanner, registry, supplyChain, threats, logs] = await Promise.all([
+                    apiCall('status'),
+                    apiCall('stats'),
+                    apiCall('analytics/classifier'),
+                    apiCall('analytics/scanner-pipeline'),
+                    apiCall('analytics/registry-hooks'),
+                    apiCall('analytics/supply-chain'),
+                    apiCall('alerts/semantic-threats'),
+                    apiCall('logs')
+                ]);
+                
+                state.data = { status, stats, classifier, scanner, registry, supplyChain, threats, logs };
+                state.authenticated = true;
+                render();
+            } catch (error) {
+                console.error('Failed to fetch data:', error);
+                state.authenticated = false;
+                render();
+            }
+        }
+
+        // Logout
+        function logout() {
+            state.authenticated = false;
+            render();
+        }
+
+        // Tab switching
+        function switchTab(tab) {
+            state.activeTab = tab;
+            render();
+        }
+
+        // Render functions
+        function renderLoginScreen() {
+            return `
+                <div class="min-h-screen flex items-center justify-center px-4">
+                    <div class="glass p-8 rounded-2xl w-full max-w-md border border-white/20">
+                        <div class="text-center mb-8">
+                            <h1 class="text-4xl font-bold text-white mb-2">VIGIL</h1>
+                            <p class="text-gray-400">Connecting to local instance...</p>
+                        </div>
+                        <div class="text-center">
+                            <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderHeader() {
+            const status = state.data.status || {};
+            return `
+                <header class="glass border-b border-white/10 mb-6">
+                    <div class="max-w-7xl mx-auto px-6 py-4">
+                        <div class="flex justify-between items-center">
+                            <div class="flex items-center space-x-4">
+                                <h1 class="text-2xl font-bold">VIGIL COMMAND CENTER</h1>
+                                <span class="px-3 py-1 bg-green-500/20 text-green-400 rounded-full text-xs font-mono flex items-center">
+                                    <span class="pulse-dot inline-block w-2 h-2 bg-green-400 rounded-full mr-2"></span>
+                                    ${status.status || 'ONLINE'}
+                                </span>
+                                <span class="text-gray-500 text-sm">v${status.version || '2.0.0'} | ${status.mode || 'LOCAL'}</span>
+                            </div>
+                            <button onclick="logout()" class="text-gray-400 hover:text-white text-sm transition">
+                                Logout
+                            </button>
+                        </div>
+                    </div>
+                </header>
+            `;
+        }
+
+        function renderTabs() {
+            const tabs = [
+                { id: 'overview', label: 'Overview', icon: '📊' },
+                { id: 'semantic', label: 'Semantic Threats', icon: '🛡️' },
+                { id: 'scanner', label: 'Scanner Pipeline', icon: '🔍' },
+                { id: 'governance', label: 'Data Governance', icon: '📋' },
+                { id: 'supply-chain', label: 'Supply Chain', icon: '🔗' },
+                { id: 'alerts', label: 'Alerts', icon: '🚨' }
+            ];
+
+            return `
+                <div class="flex space-x-1 mb-6 border-b border-white/10">
+                    ${tabs.map(tab => `
+                        <button 
+                            onclick="switchTab('${tab.id}')"
+                            class="px-4 py-3 ${state.activeTab === tab.id ? 'tab-active' : 'text-gray-400 hover:text-white'} transition"
+                        >
+                            ${tab.icon} ${tab.label}
+                        </button>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function renderOverview() {
+            const stats = state.data.stats || {};
+            const classifier = state.data.classifier || { breakdown: {} };
+            const scanner = state.data.scanner || { verdicts: {} };
+            const threats = state.data.threats || {};
+
+            return `
+                <div class="space-y-6">
+                    <!-- Key Metrics -->
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div class="glass p-6 rounded-lg metric-card">
+                            <div class="text-gray-400 text-sm mb-2">Total Requests</div>
+                            <div class="text-3xl font-bold">${stats.total_requests || 0}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg metric-card border-t-2 border-red-500">
+                            <div class="text-red-400 text-sm mb-2">Blocked Attacks</div>
+                            <div class="text-3xl font-bold text-red-500">${stats.blocked_attacks || 0}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg metric-card border-t-2 border-yellow-500">
+                            <div class="text-yellow-400 text-sm mb-2">Active Alerts</div>
+                            <div class="text-3xl font-bold text-yellow-500">${threats.total_alerts || 0}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg metric-card border-t-2 border-blue-500">
+                            <div class="text-blue-400 text-sm mb-2">Daily Cost</div>
+                            <div class="text-3xl font-bold text-blue-500">${stats.cost_today || '$0.00'}</div>
+                        </div>
+                    </div>
+
+                    <!-- Charts Row -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="glass p-6 rounded-lg">
+                            <h3 class="text-lg font-semibold mb-4">Classifier Verdicts</h3>
+                            <canvas id="classifier-chart"></canvas>
+                        </div>
+                        <div class="glass p-6 rounded-lg">
+                            <h3 class="text-lg font-semibold mb-4">Scanner Pipeline</h3>
+                            <canvas id="scanner-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity -->
+                    <div class="glass p-6 rounded-lg">
+                        <h3 class="text-lg font-semibold mb-4">Recent Events</h3>
+                        <div class="space-y-2">
+                            ${(state.data.logs || []).slice(0, 5).map(log => `
+                                <div class="flex justify-between items-center p-3 bg-white/5 rounded">
+                                    <span class="text-gray-400 text-sm">${log.time}</span>
+                                    <span class="flex-1 mx-4">${log.event}</span>
+                                    <span class="px-2 py-1 rounded text-xs ${
+                                        log.status === 'BLOCKED' ? 'bg-red-500/20 text-red-400' : 
+                                        log.status === 'MODIFIED' ? 'bg-yellow-500/20 text-yellow-400' :
+                                        'bg-green-500/20 text-green-400'
+                                    }">${log.status}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSemanticThreats() {
+            const classifier = state.data.classifier || { breakdown: {}, trends: {}, top_agents: [] };
+            
+            return `
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="glass p-6 rounded-lg severity-critical">
+                            <div class="text-sm text-gray-400 mb-2">Jailbreak Attempts</div>
+                            <div class="text-3xl font-bold text-red-400">${classifier.breakdown.jailbreak?.count || 0}</div>
+                            <div class="text-sm text-gray-500 mt-2">
+                                High conf: ${classifier.breakdown.jailbreak?.high_confidence || 0}
+                            </div>
+                        </div>
+                        <div class="glass p-6 rounded-lg severity-high">
+                            <div class="text-sm text-gray-400 mb-2">Exfiltration Attempts</div>
+                            <div class="text-3xl font-bold text-orange-400">${classifier.breakdown.exfiltration?.count || 0}</div>
+                            <div class="text-sm text-gray-500 mt-2">
+                                High conf: ${classifier.breakdown.exfiltration?.high_confidence || 0}
+                            </div>
+                        </div>
+                        <div class="glass p-6 rounded-lg severity-medium">
+                            <div class="text-sm text-gray-400 mb-2">Coercion Attempts</div>
+                            <div class="text-3xl font-bold text-yellow-400">${classifier.breakdown.coercion?.count || 0}</div>
+                            <div class="text-sm text-gray-500 mt-2">
+                                High conf: ${classifier.breakdown.coercion?.high_confidence || 0}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass p-6 rounded-lg">
+                        <h3 class="text-lg font-semibold mb-4">Top Offending Agents</h3>
+                        <div class="space-y-3">
+                            ${(classifier.top_agents || []).map(agent => `
+                                <div class="flex justify-between items-center p-3 bg-white/5 rounded">
+                                    <span class="font-mono text-sm">${agent.agent_id}</span>
+                                    <div class="flex space-x-4 text-sm">
+                                        ${agent.jailbreak_attempts ? `<span class="text-red-400">🔴 ${agent.jailbreak_attempts} jailbreaks</span>` : ''}
+                                        ${agent.exfiltration_attempts ? `<span class="text-orange-400">🟠 ${agent.exfiltration_attempts} exfil</span>` : ''}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderScannerPipeline() {
+            const scanner = state.data.scanner || { verdicts: {}, failed_modules: {} };
+            
+            return `
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        ${Object.entries(scanner.verdicts || {}).map(([verdict, data]) => `
+                            <div class="glass p-6 rounded-lg">
+                                <div class="text-sm text-gray-400 mb-2">${verdict}</div>
+                                <div class="text-3xl font-bold ${
+                                    verdict === 'PASS' ? 'text-green-400' :
+                                    verdict === 'WARN' ? 'text-yellow-400' :
+                                    'text-red-400'
+                                }">${data.count || 0}</div>
+                                <div class="text-sm text-gray-500 mt-2">
+                                    ${data.percentage?.toFixed(1) || 0}% | Conf: ${data.avg_confidence?.toFixed(2) || 0}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <div class="glass p-6 rounded-lg">
+                        <h3 class="text-lg font-semibold mb-4">Failed Modules</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            ${Object.entries(scanner.failed_modules || {}).map(([module, count]) => `
+                                <div class="p-3 bg-white/5 rounded">
+                                    <div class="text-sm text-gray-400">${module}</div>
+                                    <div class="text-2xl font-bold text-red-400">${count}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderGovernance() {
+            const registry = state.data.registry || { governance: {}, datasets: {}, models: {}, recent_alerts: [] };
+            const gov = registry.governance || {};
+            
+            return `
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="glass p-6 rounded-lg ${gov.poisoning_detected?.count > 0 ? 'severity-critical' : ''}">
+                            <div class="text-sm text-gray-400 mb-2">Poisoning Detected</div>
+                            <div class="text-3xl font-bold ${gov.poisoning_detected?.count > 0 ? 'text-red-400' : 'text-green-400'}">
+                                ${gov.poisoning_detected?.count || 0}
+                            </div>
+                            <div class="text-xs text-gray-500 mt-2">${gov.poisoning_detected?.severity || 'NONE'}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg">
+                            <div class="text-sm text-gray-400 mb-2">DP Enforced</div>
+                            <div class="text-3xl font-bold text-blue-400">${gov.dp_enforced?.count || 0}</div>
+                            <div class="text-xs text-gray-500 mt-2">ε avg: ${gov.dp_enforced?.epsilon_avg || 0}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg">
+                            <div class="text-sm text-gray-400 mb-2">Watermark Verified</div>
+                            <div class="text-3xl font-bold text-green-400">${gov.watermark_verified?.count || 0}</div>
+                            <div class="text-xs text-gray-500 mt-2">Success: ${gov.watermark_verified?.success_rate || 0}%</div>
+                        </div>
+                    </div>
+
+                    <div class="glass p-6 rounded-lg">
+                        <h3 class="text-lg font-semibold mb-4">Recent Governance Alerts</h3>
+                        <div class="space-y-3">
+                            ${(registry.recent_alerts || []).map(alert => `
+                                <div class="p-4 bg-white/5 rounded ${
+                                    alert.severity === 'CRITICAL' ? 'border-l-4 border-red-500' : 
+                                    'border-l-4 border-yellow-500'
+                                }">
+                                    <div class="flex justify-between">
+                                        <span class="font-semibold">${alert.type}</span>
+                                        <span class="text-sm text-gray-400">${alert.timestamp}</span>
+                                    </div>
+                                    <div class="text-sm text-gray-400 mt-1">
+                                        ${alert.dataset_id || alert.model_id}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSupplyChain() {
+            const sc = state.data.supplyChain || { sbom: {}, components: {}, active_versions: [], vulnerabilities: [] };
+            
+            return `
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="glass p-6 rounded-lg">
+                            <div class="text-sm text-gray-400 mb-2">SBOM Verification Rate</div>
+                            <div class="text-3xl font-bold text-green-400">${sc.sbom?.success_rate || 0}%</div>
+                            <div class="text-sm text-gray-500 mt-2">
+                                ${sc.sbom?.verified || 0} / ${sc.sbom?.total_verifications || 0}
+                            </div>
+                        </div>
+                        <div class="glass p-6 rounded-lg ${sc.components?.vulnerable > 0 ? 'severity-high' : ''}">
+                            <div class="text-sm text-gray-400 mb-2">Component Health</div>
+                            <div class="text-3xl font-bold ${sc.components?.vulnerable > 0 ? 'text-red-400' : 'text-green-400'}">
+                                ${sc.components?.up_to_date || 0}/${sc.components?.total_tracked || 0}
+                            </div>
+                            <div class="text-sm text-gray-500 mt-2">
+                                Vulnerable: ${sc.components?.vulnerable || 0}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="glass p-6 rounded-lg">
+                        <h3 class="text-lg font-semibold mb-4">Active Components</h3>
+                        <div class="space-y-2">
+                            ${(sc.active_versions || []).map(comp => `
+                                <div class="flex justify-between items-center p-3 bg-white/5 rounded">
+                                    <div>
+                                        <div class="font-semibold">${comp.component}</div>
+                                        <div class="text-sm text-gray-400">v${comp.version} | ${comp.hash?.substring(0, 8)}</div>
+                                    </div>
+                                    <span class="px-2 py-1 rounded text-xs ${
+                                        comp.sbom_verified ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                                    }">
+                                        ${comp.sbom_verified ? '✓ Verified' : '✗ Failed'}
+                                    </span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    ${sc.vulnerabilities?.length > 0 ? `
+                        <div class="glass p-6 rounded-lg border-l-4 border-red-500">
+                            <h3 class="text-lg font-semibold mb-4 text-red-400">⚠️ Vulnerabilities</h3>
+                            <div class="space-y-3">
+                                ${sc.vulnerabilities.map(vuln => `
+                                    <div class="p-3 bg-red-500/10 rounded">
+                                        <div class="font-semibold">${vuln.component} v${vuln.version}</div>
+                                        <div class="text-sm text-gray-400">${vuln.cve} - ${vuln.severity}</div>
+                                        <div class="text-sm text-yellow-400 mt-1">→ ${vuln.recommendation}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        function renderAlerts() {
+            const threats = state.data.threats || { alerts: [], summary: {} };
+            
+            return `
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div class="glass p-6 rounded-lg severity-critical">
+                            <div class="text-sm text-gray-400 mb-2">Critical</div>
+                            <div class="text-3xl font-bold text-red-400">${threats.critical || 0}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg severity-high">
+                            <div class="text-sm text-gray-400 mb-2">High</div>
+                            <div class="text-3xl font-bold text-orange-400">${threats.high || 0}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg severity-medium">
+                            <div class="text-sm text-gray-400 mb-2">Medium</div>
+                            <div class="text-3xl font-bold text-yellow-400">${threats.medium || 0}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg">
+                            <div class="text-sm text-gray-400 mb-2">Last Hour</div>
+                            <div class="text-3xl font-bold">${threats.summary?.last_hour || 0}</div>
+                        </div>
+                    </div>
+
+                    <div class="glass p-6 rounded-lg">
+                        <h3 class="text-lg font-semibold mb-4">Active Threats</h3>
+                        <div class="space-y-3">
+                            ${(threats.alerts || []).map(alert => `
+                                <div class="p-4 rounded ${
+                                    alert.severity === 'CRITICAL' ? 'severity-critical bg-red-500/5' :
+                                    alert.severity === 'HIGH' ? 'severity-high bg-orange-500/5' :
+                                    'severity-medium bg-yellow-500/5'
+                                }">
+                                    <div class="flex justify-between items-start mb-2">
+                                        <div>
+                                            <span class="font-semibold text-lg">${alert.description}</span>
+                                            <div class="text-sm text-gray-400 mt-1">
+                                                ${alert.agent_id || alert.dataset_id || alert.component} | ${alert.timestamp}
+                                            </div>
+                                        </div>
+                                        <span class="px-3 py-1 rounded text-xs font-semibold ${
+                                            alert.severity === 'CRITICAL' ? 'bg-red-500 text-white' :
+                                            alert.severity === 'HIGH' ? 'bg-orange-500 text-white' :
+                                            'bg-yellow-500 text-black'
+                                        }">
+                                            ${alert.severity}
+                                        </span>
+                                    </div>
+                                    ${alert.classifier_scores ? `
+                                        <div class="flex gap-3 text-sm mt-2">
+                                            ${Object.entries(alert.classifier_scores).map(([key, val]) => `
+                                                <span class="text-gray-400">
+                                                    ${key}: <span class="text-white font-mono">${(val * 100).toFixed(0)}%</span>
+                                                </span>
+                                            `).join('')}
+                                        </div>
+                                    ` : ''}
+                                    ${alert.prompt_snippet ? `
+                                        <div class="mt-2 p-2 bg-black/30 rounded text-sm font-mono text-gray-300">
+                                            "${alert.prompt_snippet}"
+                                        </div>
+                                    ` : ''}
+                                    <div class="mt-2 text-sm">
+                                        <span class="px-2 py-1 rounded ${
+                                            alert.action_taken === 'BLOCKED' ? 'bg-red-500/20 text-red-400' :
+                                            alert.action_taken === 'QUARANTINED' ? 'bg-yellow-500/20 text-yellow-400' :
+                                            'bg-blue-500/20 text-blue-400'
+                                        }">
+                                            ${alert.action_taken}
+                                        </span>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderTabContent() {
+            switch(state.activeTab) {
+                case 'overview': return renderOverview();
+                case 'semantic': return renderSemanticThreats();
+                case 'scanner': return renderScannerPipeline();
+                case 'governance': return renderGovernance();
+                case 'supply-chain': return renderSupplyChain();
+                case 'alerts': return renderAlerts();
+                default: return renderOverview();
+            }
+        }
+
+        function renderDashboard() {
+            return `
+                ${renderHeader()}
+                <div class="max-w-7xl mx-auto px-6">
+                    ${renderTabs()}
+                    ${renderTabContent()}
+                </div>
+            `;
+        }
+
+        // Main render
+        function render() {
+            const root = document.getElementById('root');
+            if (!state.authenticated) {
+                root.innerHTML = renderLoginScreen();
+            } else {
+                root.innerHTML = renderDashboard();
+                renderCharts();
+            }
+        }
+
+        // Chart rendering
+        function renderCharts() {
+            setTimeout(() => {
+                const classifierCtx = document.getElementById('classifier-chart');
+                const scannerCtx = document.getElementById('scanner-chart');
+                
+                if (classifierCtx && state.data.classifier) {
+                    new Chart(classifierCtx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['Jailbreak', 'Exfiltration', 'Coercion', 'Safe'],
+                            datasets: [{
+                                data: [
+                                    state.data.classifier.breakdown?.jailbreak?.count || 0,
+                                    state.data.classifier.breakdown?.exfiltration?.count || 0,
+                                    state.data.classifier.breakdown?.coercion?.count || 0,
+                                    state.data.classifier.breakdown?.safe?.count || 0
+                                ],
+                                backgroundColor: ['#ef4444', '#f59e0b', '#eab308', '#10b981']
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: { labels: { color: '#fff' } }
+                            }
+                        }
+                    });
+                }
+                
+                if (scannerCtx && state.data.scanner) {
+                    new Chart(scannerCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['PASS', 'WARN', 'BLOCK'],
+                            datasets: [{
+                                label: 'Verdicts',
+                                data: [
+                                    state.data.scanner.verdicts?.PASS?.count || 0,
+                                    state.data.scanner.verdicts?.WARN?.count || 0,
+                                    state.data.scanner.verdicts?.BLOCK?.count || 0
+                                ],
+                                backgroundColor: ['#10b981', '#f59e0b', '#ef4444']
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { ticks: { color: '#fff' } },
+                                x: { ticks: { color: '#fff' } }
+                            }
+                        }
+                    });
+                }
+            }, 100);
+        }
+
+        // Auto-refresh
+        if (localStorage.getItem('vigil_api_key')) {
+            state.apiKey = localStorage.getItem('vigil_api_key');
+            fetchAllData();
+            setInterval(fetchAllData, REFRESH_INTERVAL);
+        } else {
+            render();
+        }
+    </script>
+</body>
+</html>

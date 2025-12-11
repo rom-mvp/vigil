@@ -1,0 +1,35 @@
+# CoreDNS ConfigMap for DNS Rewrite (Egress Hardening)
+# Forces openai.com, api.anthropic.com, etc. to resolve to internal Vigil proxy
+# Prevents bypass by hardcoding external IPs
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  vigil-rewrite.server: |
+    # Rewrite LLM domains to internal Vigil Gateway service
+    rewrite name openai.com vigil-gateway.vigil-system.svc.cluster.local
+    rewrite name api.openai.com vigil-gateway.vigil-system.svc.cluster.local
+    rewrite name api.anthropic.com vigil-gateway.vigil-system.svc.cluster.local
+    rewrite name generativelanguage.googleapis.com vigil-gateway.vigil-system.svc.cluster.local
+    
+    # Add more LLM providers as needed:
+    # rewrite name api.cohere.ai vigil-gateway.vigil-system.svc.cluster.local
+    # rewrite name api.together.xyz vigil-gateway.vigil-system.svc.cluster.local
+
+---
+# Alternative: Use external-dns + custom DNS zone
+# If you control authoritative DNS, create CNAME records:
+#   openai.com.internal -> vigil-gateway.vigil-system.svc.cluster.local
+# Then configure cluster DNS to use .internal suffix for overrides
+
+---
+# Deployment annotation to apply CoreDNS custom config
+# After creating the ConfigMap, restart CoreDNS:
+#   kubectl rollout restart deployment/coredns -n kube-system
+
+# Verification:
+#   kubectl run -it --rm debug --image=busybox --restart=Never -- nslookup openai.com
+# Expected: Should resolve to Vigil Gateway cluster IP, not public OpenAI

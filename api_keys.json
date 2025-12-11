@@ -1,0 +1,18 @@
+{
+  "keys": [
+    {
+      "hash": "c4382b9a49e73cb0091d7c3923d9cc15d59ad069614341d0a662393041f02dd8",
+      "username": "testuser",
+      "description": "Test dashboard access",
+      "created_at": "2025-12-05T16:27:07.546820",
+      "active": true
+    },
+    {
+      "hash": "66ee61d5374c8e40e15402af059616db5df52a78c0b6d5a66e075d6d640bc69a",
+      "username": "desada",
+      "description": "admin",
+      "created_at": "2025-12-05T16:28:22.558844",
+      "active": true
+    }
+  ]
+}

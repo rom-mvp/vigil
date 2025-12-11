@@ -1,0 +1,95 @@
+# Kubernetes NetworkPolicy for Egress Hardening
+# Only allows Vigil Gateway sidecar namespace to reach LLM endpoints
+# All other pods are blocked from direct LLM access (fail-closed)
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vigil-egress-lockdown
+  namespace: default  # Apply to application namespace
+spec:
+  podSelector: {}  # Applies to all pods in namespace
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Allow traffic to Vigil Gateway ONLY (internal proxy)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: vigil-system  # Vigil runs in separate namespace
+        - podSelector:
+            matchLabels:
+              app: vigil-gateway
+      ports:
+        - protocol: TCP
+          port: 8000
+
+    # Block direct access to external LLM APIs
+    # (OpenAI, Anthropic, etc. should resolve to Vigil via DNS rewrite)
+    # No egress rules for 443 to external IPs = blocked
+
+---
+# NetworkPolicy for Vigil Gateway Namespace
+# Allows Vigil to reach real LLM endpoints
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vigil-gateway-egress
+  namespace: vigil-system
+spec:
+  podSelector:
+    matchLabels:
+      app: vigil-gateway
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow HTTPS to LLM providers (specific CIDRs or all internet)
+    # Option 1: Allow all HTTPS (less restrictive)
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+
+    # Option 2 (stricter): Only allow specific LLM provider IPs
+    # Uncomment and populate with actual IP ranges:
+    # - to:
+    #     - ipBlock:
+    #         cidr: 13.107.42.0/24  # Example: OpenAI IP range
+    #   ports:
+    #     - protocol: TCP
+    #       port: 443
+
+---
+# Deny-all default policy for application namespace
+# Ensures no pod bypasses Vigil
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: default
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  # No egress rules = deny all (except explicitly allowed above)

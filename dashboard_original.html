@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vigil Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { background-color: #000000; color: #ffffff; font-family: sans-serif; }
+        .glass { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+        .bg-success { background-color: #22c55e; }
+        .bg-danger { background-color: #ef4444; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const API_BASE = "";
+
+        function App() {
+            const [data, setData] = React.useState(null);
+
+            React.useEffect(() => {
+                fetchData();
+                const interval = setInterval(fetchData, 2000);
+                return () => clearInterval(interval);
+            }, []);
+
+            const fetchData = async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/admin/dashboard`);
+                    if (res.ok) setData(await res.json());
+                } catch (e) { console.error(e); }
+            };
+
+            if (!data) return <div className="p-10 text-center text-gray-500">Initializing...</div>;
+            
+            return (
+                <div className="min-h-screen p-8 max-w-6xl mx-auto font-mono">
+                    <header className="flex justify-between items-center mb-12 border-b border-white/10 pb-6">
+                        <div>
+                            <h1 className="text-2xl font-bold tracking-tight">VIGIL CONSOLE</h1>
+                            <div className="text-xs text-gray-500 mt-1">LOCAL DEPLOYMENT • LIVE</div>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-3 gap-6 mb-12">
+                        <div className="glass p-6 rounded-lg">
+                            <div className="text-gray-500 text-xs uppercase mb-2">Total Events</div>
+                            <div className="text-4xl font-bold">{data.stats.total_requests.toLocaleString()}</div>
+                        </div>
+                        <div className="glass p-6 rounded-lg border-red-500/30">
+                            <div className="text-red-400 text-xs uppercase mb-2">Threats Neutralized</div>
+                            <div className="text-4xl font-bold text-red-500">{data.stats.blocked_attacks}</div>
+                        </div>
+                        <div className="glass p-6 rounded-lg">
+                            <div className="text-blue-400 text-xs uppercase mb-2">PII Redacted</div>
+                            <div className="text-4xl font-bold text-blue-500">{data.stats.redacted_events}</div>
+                        </div>
+                    </div>
+
+                    <div className="glass rounded-lg overflow-hidden">
+                        <div className="p-4 border-b border-white/10 bg-white/5 text-xs font-bold uppercase text-gray-400">Live Feed</div>
+                        <table className="w-full text-xs">
+                            <thead className="text-gray-500 border-b border-white/5">
+                                <tr>
+                                    <th className="p-4 text-left">Timestamp</th>
+                                    <th className="p-4 text-left">Status</th>
+                                    <th className="p-4 text-left">Agent</th>
+                                    <th className="p-4 text-left">Details</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-white/5">
+                                {data.recent_logs.map((log, i) => {
+                                    const isBlocked = log.status.includes('BLOCKED');
+                                    const isModified = log.status.includes('MODIFIED');
+                                    return (
+                                        <tr key={i} className="hover:bg-white/5 transition">
+                                            <td className="p-4 text-gray-500">{new Date(log.timestamp).toLocaleTimeString()}</td>
+                                            <td className="p-4">
+                                                <span className={`px-2 py-1 rounded ${isBlocked ? 'bg-red-500/20 text-red-400' : isModified ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'}`}>
+                                                    {log.status}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 text-gray-300">{log.agent_id}</td>
+                                            <td className="p-4 text-gray-400">
+                                                {isBlocked ? log.details.reason : (log.details.redacted ? `Redacted ${log.details.pii_type}` : 'Safe Traffic')}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

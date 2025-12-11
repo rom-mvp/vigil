@@ -1,6 +1,9 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 WORKDIR /app
-RUN pip install flask flask-cors
+RUN pip install flask flask-cors boto3
 COPY dashboard_server.py .
-COPY dashboard.html .
+COPY dashboard_original.html ./dashboard.html
+COPY models.py .
+COPY demo_realtime.py .
+EXPOSE 5000
 CMD ["python", "dashboard_server.py"]

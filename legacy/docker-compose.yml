@@ -5,7 +5,12 @@ services:
       context: .
       dockerfile: Dockerfile.dashboard
     ports:
-      - "3000:3000"
+      - "5000:5000"
+    environment:
+      - VIGIL_MODE=local
+      - VIGIL_REQUIRE_AUTH=false
+    volumes:
+      - ./api_keys.json:/app/api_keys.json:ro
     networks:
       - vigil-net
   vigil-gateway:
@@ -13,7 +18,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - LOG_SERVER_URL=http://vigil-dashboard:3000/ingest
+      - VIGIL_MODE=local
+      - MAX_REQUEST_BYTES=1048576
+      - RATE_LIMIT_RPS=5
+      - REQUIRE_MTLS=false
     networks:
       - vigil-net
 networks:

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vigil Console</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0b0c15; color: #ffffff; font-family: sans-serif; }
+        .glass { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(10px); }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script>
+        const API_BASE = "";
+
+        let data = null;
+
+        async function fetchData() {
+            try {
+                const res = await fetch(`${API_BASE}/admin/dashboard`);
+                if (res.ok) {
+                    data = await res.json();
+                    render();
+                }
+            } catch (e) { 
+                console.error(e); 
+            }
+        }
+
+        function render() {
+            if (!data) {
+                document.getElementById('root').innerHTML = `
+                    <div class="p-10 text-center text-gray-500">Loading Enterprise Data...</div>
+                `;
+                return;
+            }
+
+            document.getElementById('root').innerHTML = `
+                <div class="min-h-screen p-8 max-w-6xl mx-auto font-mono text-sm">
+                    <header class="flex justify-between items-center mb-12 border-b border-white/10 pb-6">
+                        <div>
+                            <h1 class="text-2xl font-bold tracking-tight text-white">COMMAND CENTER</h1>
+                            <div class="text-xs text-gray-500 mt-1">LOCAL FLEET • STATUS: ONLINE</div>
+                        </div>
+                    </header>
+                    <div class="grid grid-cols-4 gap-6 mb-12">
+                        <div class="glass p-6 rounded-lg">
+                            <div class="text-gray-500 text-xs uppercase mb-2">Requests</div>
+                            <div class="text-3xl font-bold text-white">${data.stats.total_requests.toLocaleString()}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg border-t-2 border-red-500">
+                            <div class="text-red-400 text-xs uppercase mb-2">Blocked</div>
+                            <div class="text-3xl font-bold text-red-500">${data.stats.blocked_attacks}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg border-t-2 border-blue-500">
+                            <div class="text-blue-400 text-xs uppercase mb-2">Redacted</div>
+                            <div class="text-3xl font-bold text-blue-500">${data.stats.redacted_events}</div>
+                        </div>
+                        <div class="glass p-6 rounded-lg border-t-2 border-green-500">
+                            <div class="text-green-400 text-xs uppercase mb-2">Cost Today</div>
+                            <div class="text-3xl font-bold text-green-500">${data.stats.cost_today}</div>
+                        </div>
+                    </div>
+                    <div class="glass rounded-lg overflow-hidden">
+                        <div class="p-4 border-b border-white/10 bg-white/5 flex justify-between items-center">
+                            <span class="font-bold uppercase text-gray-400">Logs</span>
+                            <span class="text-green-500 text-xs">
+                                <span class="pulse-dot">●</span> Live
+                            </span>
+                        </div>
+                        <table class="w-full text-left">
+                            <thead class="text-gray-500 border-b border-white/5">
+                                <tr>
+                                    <th class="p-4">Time</th>
+                                    <th class="p-4">Status</th>
+                                    <th class="p-4">Agent ID</th>
+                                    <th class="p-4">Details</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-white/5">
+                                ${data.recent_logs.map(log => {
+                                    const isBlocked = log.status.includes('BLOCKED');
+                                    const isModified = log.status.includes('MODIFIED');
+                                    const time = new Date(log.timestamp).toLocaleTimeString();
+                                    return `
+                                        <tr class="hover:bg-white/5 transition">
+                                            <td class="p-4 text-gray-500">${time}</td>
+                                            <td class="p-4">
+                                                <span class="px-2 py-1 rounded text-xs border ${
+                                                    isBlocked ? 'border-red-500 text-red-400' : 
+                                                    isModified ? 'border-yellow-500 text-yellow-400' :
+                                                    'border-green-500 text-green-400'
+                                                }">${log.status}</span>
+                                            </td>
+                                            <td class="p-4 text-gray-300">${log.agent_id}</td>
+                                            <td class="p-4 text-gray-400">
+                                                ${isBlocked ? `<span class="text-red-400">${log.details.reason}</span>` : 
+                                                  isModified ? `<span class="text-blue-400">🔒 ${log.details.pii_type} Redacted</span>` : 
+                                                  'Clean'}
+                                            </td>
+                                        </tr>
+                                    `;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Initial fetch
+        fetchData();
+        
+        // Auto-refresh every 2 seconds
+        setInterval(fetchData, 2000);
+    </script>
+</body>
+</html>
