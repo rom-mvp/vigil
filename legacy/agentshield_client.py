@@ -106,12 +106,17 @@ class AgentShieldClient:
         if not signature_b64 or not signature_key_id:
             raise ValueError("Unsigned decision or missing signature_key_id")
 
-        # Validate context_echo if present
+        # Validate context_echo if present (prevents replay attacks)
         context_echo = decision.get("context_echo")
         if context_echo:
+            req_request_id = enforcement_request.get("request_id")
             req_tenant = enforcement_request.get("tenant_id")
             req_user = enforcement_request.get("agent_id")
             req_policy = enforcement_request.get("policy_version")
+            
+            # Explicit request_id validation - prevents replay of old decisions
+            if context_echo.get("request_id") != req_request_id:
+                raise ValueError(f"Replay detected: request_id mismatch {context_echo.get('request_id')} != {req_request_id}")
             if context_echo.get("tenant_id") != req_tenant:
                 raise ValueError(f"Context mismatch: tenant {context_echo.get('tenant_id')} != {req_tenant}")
             if context_echo.get("user_id") != req_user:

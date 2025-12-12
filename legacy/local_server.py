@@ -5,6 +5,8 @@ import threading
 import requests
 import json
 import datetime
+import time
+import uuid
 
 sys.path.append(os.getcwd())
 from firewall_engine import FirewallEngine
@@ -25,6 +27,11 @@ MAX_REQUEST_BYTES = int(os.environ.get('MAX_REQUEST_BYTES', '1048576'))  # 1 MB 
 RATE_LIMIT_RPS = float(os.environ.get('RATE_LIMIT_RPS', '5'))
 REQUIRE_MTLS = os.environ.get('REQUIRE_MTLS', 'false').lower() == 'true'
 VIGIL_ENVIRONMENT = os.environ.get('VIGIL_ENVIRONMENT', 'local')
+
+# Policy enforcement thresholds
+MAX_RISK_SCORE = float(os.environ.get('MAX_RISK_SCORE', '0.30'))
+DISALLOWED_REASONS = set(os.environ.get('DISALLOWED_REASONS', 'credential-exfil,tenant-boundary,privilege-escalation').split(','))
+AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '3000')) / 1000.0
 
 # Simple per-API-key token buckets (in-memory)
 _rate_buckets = {}
@@ -105,6 +112,13 @@ def update_policy():
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def transparent_proxy():
+    # Start timing
+    t_start = time.time()
+    timings = {}
+    
+    # Request ID correlation (accept client-supplied or generate)
+    request_id = request.headers.get('X-Request-ID', str(uuid.uuid4()))
+    
     # mTLS client cert enforcement (stub): require header when enabled
     if REQUIRE_MTLS and not request.headers.get('X-Client-Cert'):
         return jsonify({"error": {"message": "mTLS required: client cert missing", "code": 401}}), 401
@@ -144,20 +158,50 @@ def transparent_proxy():
     
     # Centralized pre-LLM enforcement via AgentShield
     FALLBACK = os.environ.get('AGENTSHIELD_REQUIRED', 'true').lower() != 'true'
+    tenant_id = request.headers.get('X-Tenant-ID', 'local-docker')
+    policy_version = int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0))
+    
     enforcement_req = {
-        "request_id": f"req_{datetime.datetime.now().timestamp()}",
-        "tenant_id": request.headers.get('X-Tenant-ID', 'local-docker'),
+        "request_id": request_id,
+        "tenant_id": tenant_id,
         "agent_id": agent_id,
-        "policy_version": int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0)),
+        "policy_version": policy_version,
         "environment": VIGIL_ENVIRONMENT,
         "messages": messages,
         "metadata": body.get('metadata', {})
     }
+    
+    t_agentshield_start = time.time()
+    decision = None
+    enforcement_error = None
+    
     try:
         decision = agentshield.enforce(enforcement_req)
+        timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
     except Exception as e:
+        timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
+        enforcement_error = str(e)
         if not FALLBACK:
-            return jsonify({"error": {"message": "AgentShield unavailable or decision verification failed", "code": 503}}), 503
+            # Audit the failure
+            ship_log_async({
+                "request_id": request_id,
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "seq_id": _seq_id,
+                "status": "ERROR",
+                "agent_id": agent_id,
+                "tenant_id": tenant_id,
+                "policy_version": policy_version,
+                "environment": VIGIL_ENVIRONMENT,
+                "risk_score": None,
+                "signature_hash": None,
+                "audit_event_id": None,
+                "reasons": ["agentshield_failure"],
+                "sig_verified": False,
+                "sig_key_id": None,
+                "error": enforcement_error,
+                "timings": timings
+            })
+            return jsonify({"error": {"message": "AgentShield unavailable or decision verification failed", "code": 503, "request_id": request_id}}), 503
         # Fallback path: run local firewall + PII
         fallback_used = True
         for msg in messages:
@@ -165,16 +209,22 @@ def transparent_proxy():
                 content = msg.get('content', '')
                 check = firewall.scan_input(content)
                 if not check['safe']:
+                    timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
                     ship_log_async({
-                        "request_id": enforcement_req["request_id"],
+                        "request_id": request_id,
                         "timestamp": datetime.datetime.utcnow().isoformat(),
                         "seq_id": _seq_id,
                         "status": "BLOCK",
                         "agent_id": agent_id,
-                        "tenant_id": enforcement_req['tenant_id'],
-                        "details": {"reason": check['reason'], "redacted": False, "FALLBACK_USED": True}
+                        "tenant_id": tenant_id,
+                        "policy_version": policy_version,
+                        "environment": VIGIL_ENVIRONMENT,
+                        "risk_score": None,
+                        "reasons": [check['reason']],
+                        "fallback_used": True,
+                        "timings": timings
                     })
-                    return jsonify({"error": {"message": f"Blocked (fallback): {check['reason']}", "code": 403}}), 403
+                    return jsonify({"error": {"message": f"Blocked (fallback): {check['reason']}", "code": 403, "request_id": request_id}}), 403
                 clean_text, was_redacted = pii_engine.scan_and_redact(content)
                 if was_redacted:
                     msg['content'] = clean_text
@@ -196,27 +246,46 @@ def transparent_proxy():
     reasons = decision.get('reasons', [])
     sig_verified = decision.get('sig_verified', False)
     sig_key_id = decision.get('key_id')
+    
+    # Gateway policy enforcement (override AgentShield if needed)
+    policy_override = None
+    if risk_score is not None and risk_score > MAX_RISK_SCORE:
+        action = 'BLOCK'
+        policy_override = f'risk_score_threshold_exceeded:{risk_score}>{MAX_RISK_SCORE}'
+        reasons.append(policy_override)
+    
+    # Check for disallowed reasons
+    disallowed_found = [r for r in reasons if r in DISALLOWED_REASONS]
+    if disallowed_found:
+        action = 'BLOCK'
+        policy_override = f'disallowed_reasons:{disallowed_found}'
+        if policy_override not in reasons:
+            reasons.append(policy_override)
 
     # Structured log + local append-only cache
+    timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
+    
     ship_log_async({
-        "request_id": enforcement_req["request_id"],
+        "request_id": request_id,
         "timestamp": datetime.datetime.utcnow().isoformat(),
         "seq_id": _seq_id,
         "status": action,
         "agent_id": agent_id,
-        "tenant_id": enforcement_req['tenant_id'],
-        "policy_version": enforcement_req.get('policy_version'),
-        "environment": enforcement_req.get('environment'),
+        "tenant_id": tenant_id,
+        "policy_version": policy_version,
+        "environment": VIGIL_ENVIRONMENT,
         "risk_score": risk_score,
         "signature_hash": signature_hash,
         "audit_event_id": audit_event_id,
         "reasons": reasons,
         "sig_verified": sig_verified,
-        "sig_key_id": sig_key_id
+        "sig_key_id": sig_key_id,
+        "policy_override": policy_override,
+        "timings": timings
     })
 
     if action == 'BLOCK':
-        return jsonify({"error": {"message": ", ".join(reasons) or "Blocked", "code": 403, "signature_hash": signature_hash, "audit_event_id": audit_event_id}}), 403
+        return jsonify({"error": {"message": ", ".join(reasons) or "Blocked", "code": 403, "request_id": request_id, "signature_hash": signature_hash, "audit_event_id": audit_event_id}}), 403
     if action in ('SANITIZE', 'REWRITE'):
         sanitized = decision.get('sanitized') or messages
         # Provide a simple response indicating sanitation and the new content
