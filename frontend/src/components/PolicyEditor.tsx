@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { updatePolicy } from "../src/api/client";
+import { updatePolicy } from "../api/client";
 
 export default function PolicyEditor() {
   const [text, setText] = useState("{\n  \"policy_version\": 1,\n  \"rules\": []\n}");

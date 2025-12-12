@@ -6,6 +6,9 @@ export interface AuditLog {
   status: string;
   endpoint: string;
   signature_hash: string;
+  audit_event_id?: string;
+  risk_score?: number;
+  reasons?: string[];
   classifier_labels?: string[];
   classifier_verdict?: string;
   scanner_verdict?: string;

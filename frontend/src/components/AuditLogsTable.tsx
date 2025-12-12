@@ -58,6 +58,9 @@ export default function AuditLogsTable() {
               <th className="px-4 py-3 text-left">Status</th>
               <th className="px-4 py-3 text-left">Endpoint</th>
               <th className="px-4 py-3 text-left">Signature Hash</th>
+              <th className="px-4 py-3 text-left">Audit Event</th>
+              <th className="px-4 py-3 text-left">Risk</th>
+              <th className="px-4 py-3 text-left">Reasons</th>
               <th className="px-4 py-3 text-left">Verdict</th>
               <th className="px-4 py-3 text-left">SBOM</th>
             </tr>
@@ -102,6 +105,35 @@ export default function AuditLogsTable() {
                   >
                     {log.signature_hash.substring(0, 12)}...
                   </span>
+                </td>
+                <td className="px-4 py-3">
+                  {log.audit_event_id ? (
+                    <span className="font-mono text-xs text-slate-400" title={log.audit_event_id}>
+                      {log.audit_event_id.substring(0, 10)}...
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-500">-</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {typeof log.risk_score === "number" ? (
+                    <span className={`text-xs ${
+                      log.risk_score >= 0.8 ? "text-red-400" : log.risk_score >= 0.4 ? "text-yellow-400" : "text-green-400"
+                    }`}>
+                      {Math.round(log.risk_score * 100)}%
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-500">-</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {log.reasons && log.reasons.length > 0 ? (
+                    <span className="text-xs text-slate-400" title={log.reasons.join("\n")}>
+                      {log.reasons.slice(0, 2).join(", ")}{log.reasons.length > 2 ? "…" : ""}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-500">-</span>
+                  )}
                 </td>
                 <td className="px-4 py-3">
                   {log.classifier_verdict && (
