@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import time
@@ -106,6 +107,15 @@ class AgentShieldClient:
         if not signature_b64 or not signature_key_id:
             raise ValueError("Unsigned decision or missing signature_key_id")
 
+        # TEE.fail: Validate timestamp to prevent old decisions
+        issued_at = decision.get("issued_at")
+        if issued_at:
+            current_time = time.time()
+            decision_age = current_time - issued_at
+            max_age_seconds = int(os.getenv("DECISION_MAX_AGE_SECONDS", "300"))  # 5 minutes default
+            if decision_age > max_age_seconds:
+                raise ValueError(f"Decision timestamp expired: {decision_age}s > {max_age_seconds}s")
+
         # Validate context_echo if present (prevents replay attacks)
         context_echo = decision.get("context_echo")
         if context_echo:
@@ -124,32 +134,41 @@ class AgentShieldClient:
             if context_echo.get("policy_version") != req_policy:
                 raise ValueError(f"Context mismatch: policy {context_echo.get('policy_version')} != {req_policy}")
 
-        # Load key from JWKS or pinned
+        # Load key from JWKS or pinned (TEE.fail: must succeed for verification)
         pubkey = None
         if self.jwks_url:
             pubkey = self._get_key_from_jwks(signature_key_id)
         if not pubkey:
             pubkey = self._pubkey
         if not pubkey:
-            raise RuntimeError("No public key available for signature verification")
+            # TEE.fail: Key not found is critical failure - fail closed
+            raise RuntimeError(f"Signature verification failed: key '{signature_key_id}' not available (key_not_found)")
 
         try:
             signature = base64.urlsafe_b64decode(signature_b64 + "==")
         except Exception as exc:
             raise ValueError("Invalid signature encoding") from exc
 
+        # Build canonical payload from CURRENT decision state
+        current_canonical = self._canonical_payload(enforcement_request, decision)
+        current_canonical_hash = hashlib.sha256(current_canonical).digest()
+
         # Verify based on key type
         if isinstance(pubkey, ed25519.Ed25519PublicKey):
             # Ed25519: verify against canonical_payload_hash if provided, else canonical payload
             canonical_hash = decision.get("canonical_payload_hash")
             if canonical_hash:
-                message = base64.urlsafe_b64decode(canonical_hash + "==")
+                # TEE.fail: Verify the provided hash matches current state
+                provided_hash = base64.urlsafe_b64decode(canonical_hash + "==")
+                if provided_hash != current_canonical_hash:
+                    raise ValueError("TEE.fail: Decision payload tampered (hash mismatch)")
+                message = provided_hash
             else:
-                message = self._canonical_payload(enforcement_request, decision)
+                message = current_canonical_hash
             pubkey.verify(signature, message)
         elif isinstance(pubkey, rsa.RSAPublicKey):
             # RSA: verify against canonical payload
-            payload = self._canonical_payload(enforcement_request, decision)
+            payload = current_canonical
             pubkey.verify(
                 signature,
                 payload,
