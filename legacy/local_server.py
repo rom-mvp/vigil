@@ -24,6 +24,7 @@ LOG_SERVER_URL = os.environ.get('LOG_SERVER_URL', 'http://vigil-dashboard:3000/i
 MAX_REQUEST_BYTES = int(os.environ.get('MAX_REQUEST_BYTES', '1048576'))  # 1 MB default
 RATE_LIMIT_RPS = float(os.environ.get('RATE_LIMIT_RPS', '5'))
 REQUIRE_MTLS = os.environ.get('REQUIRE_MTLS', 'false').lower() == 'true'
+VIGIL_ENVIRONMENT = os.environ.get('VIGIL_ENVIRONMENT', 'local')
 
 # Simple per-API-key token buckets (in-memory)
 _rate_buckets = {}
@@ -148,6 +149,7 @@ def transparent_proxy():
         "tenant_id": request.headers.get('X-Tenant-ID', 'local-docker'),
         "agent_id": agent_id,
         "policy_version": int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0)),
+        "environment": VIGIL_ENVIRONMENT,
         "messages": messages,
         "metadata": body.get('metadata', {})
     }
@@ -155,7 +157,7 @@ def transparent_proxy():
         decision = agentshield.enforce(enforcement_req)
     except Exception as e:
         if not FALLBACK:
-            return jsonify({"error": {"message": "AgentShield unavailable", "code": 503}}), 503
+            return jsonify({"error": {"message": "AgentShield unavailable or decision verification failed", "code": 503}}), 503
         # Fallback path: run local firewall + PII
         fallback_used = True
         for msg in messages:
@@ -182,7 +184,8 @@ def transparent_proxy():
             "reasons": ["fallback"],
             "signature_hash": None,
             "audit_event_id": None,
-            "sanitized": messages
+            "sanitized": messages,
+            "sig_verified": False
         }
 
     # Enforce AgentShield decision
@@ -191,6 +194,8 @@ def transparent_proxy():
     signature_hash = decision.get('signature_hash')
     audit_event_id = decision.get('audit_event_id')
     reasons = decision.get('reasons', [])
+    sig_verified = decision.get('sig_verified', False)
+    sig_key_id = decision.get('key_id')
 
     # Structured log + local append-only cache
     ship_log_async({
@@ -200,10 +205,14 @@ def transparent_proxy():
         "status": action,
         "agent_id": agent_id,
         "tenant_id": enforcement_req['tenant_id'],
+        "policy_version": enforcement_req.get('policy_version'),
+        "environment": enforcement_req.get('environment'),
         "risk_score": risk_score,
         "signature_hash": signature_hash,
         "audit_event_id": audit_event_id,
-        "reasons": reasons
+        "reasons": reasons,
+        "sig_verified": sig_verified,
+        "sig_key_id": sig_key_id
     })
 
     if action == 'BLOCK':

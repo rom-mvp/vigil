@@ -17,9 +17,10 @@ This document summarizes Vigil's enforcement-first gateway integration with Agen
   2. Payload size guard via `MAX_REQUEST_BYTES`.
   3. Simple per-key rate limiting (`RATE_LIMIT_RPS`).
   4. Policy version monotonicity via `X-Policy-Version`.
-  5. Pre-LLM enforcement by calling AgentShield with `{ request_id, tenant_id, agent_id, policy_version, messages, metadata }`.
-  6. If AgentShield is unavailable and `AGENTSHIELD_REQUIRED=false`, fallback to local `FirewallEngine` and `PIIEngine`.
-  7. Decision (`BLOCK` | `SANITIZE` | `REWRITE` | `ALLOW`) is enforced, and structured logs are shipped asynchronously.
+  5. Pre-LLM enforcement by calling AgentShield with `{ request_id, tenant_id, agent_id, policy_version, environment, messages, metadata }`.
+  6. Verify AgentShield decision signature against a pinned public key (`AGENTSHIELD_REQUIRE_SIGNED=true`), matching `key_id`; fail closed on verification errors when AgentShield is required.
+  7. If AgentShield is unavailable or verification fails and `AGENTSHIELD_REQUIRED=false`, fallback to local `FirewallEngine` and `PIIEngine`.
+  8. Decision (`BLOCK` | `SANITIZE` | `REWRITE` | `ALLOW`) is enforced, and structured logs are shipped asynchronously.
 
 ## Structured Audit Log Fields
 
@@ -27,9 +28,10 @@ Written via `ship_log_async()` to the merkle store and remote ingest endpoint:
 
 - `request_id`, `timestamp`, `seq_id`
 - `status` (decision action)
-- `agent_id`, `tenant_id`
+- `agent_id`, `tenant_id`, `policy_version`, `environment`
 - `risk_score`, `signature_hash`, `audit_event_id`
 - `reasons` (array of strings)
+- `sig_verified`, `sig_key_id`
 
 The dashboard front-end reads `/api/v1/audit/logs` from the gateway and renders these fields.
 
