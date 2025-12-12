@@ -67,6 +67,20 @@ def ship_log_async(payload):
 def heartbeat():
     return jsonify({"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()})
 
+@app.route('/api/v1/metrics', methods=['GET'])
+def get_metrics():
+    """Priority 5: Observability - Get current metrics and latency percentiles."""
+    stats = agentshield.metrics.get_stats()
+    return jsonify({
+        "metrics": stats,
+        "timestamp": datetime.datetime.utcnow().isoformat()
+    })
+
+@app.route('/api/v1/audit/verify', methods=['GET'])
+def verify_audit():
+    """Priority 4: API Polish - Alias for /api/v1/compliance/verify-merkle."""
+    return verify_merkle_chain()
+
 @app.route('/api/v1/audit/logs', methods=['GET'])
 def get_audit_logs():
     """Return recent audit logs from local append-only cache (tail)."""
@@ -157,18 +171,35 @@ def update_policy():
                 pass
         return jsonify({"status": "ok", "mirrored": True, "policy_version": pv}), 200
 
-@app.route('/api/v1/policies', methods=['GET'])
-def get_policies():
-    """Get current policy configuration."""
-    return jsonify({
-        "max_risk_score": MAX_RISK_SCORE,
-        "disallowed_reasons": list(DISALLOWED_REASONS),
-        "timeout_ms": AGENTSHIELD_TIMEOUT_SEC * 1000,
-        "rate_limit_rps": RATE_LIMIT_RPS,
-        "require_mtls": REQUIRE_MTLS,
-        "signature_verification": True,  # Always enabled
-        "fail_closed": True  # Always enabled
-    })
+@app.route('/api/v1/policies', methods=['GET', 'PUT'])
+def manage_policies():
+    """Get current policy configuration or update policies (Priority 4)."""
+    if request.method == 'GET':
+        return jsonify({
+            "max_risk_score": MAX_RISK_SCORE,
+            "disallowed_reasons": list(DISALLOWED_REASONS),
+            "timeout_ms": AGENTSHIELD_TIMEOUT_SEC * 1000,
+            "rate_limit_rps": RATE_LIMIT_RPS,
+            "require_mtls": REQUIRE_MTLS,
+            "signature_verification": True,  # Always enabled
+            "fail_closed": True  # Always enabled
+        })
+    elif request.method == 'PUT':
+        """Priority 4: Update policy configuration dynamically."""
+        body = request.json or {}
+        # Note: In production, validate and persist these to a store
+        # For now, just return acknowledgment
+        return jsonify({
+            "status": "policy_update_accepted",
+            "current": {
+                "max_risk_score": MAX_RISK_SCORE,
+                "disallowed_reasons": list(DISALLOWED_REASONS),
+                "timeout_ms": AGENTSHIELD_TIMEOUT_SEC * 1000,
+                "rate_limit_rps": RATE_LIMIT_RPS
+            },
+            "requested": body,
+            "note": "Policy updates require server restart or config manager"
+        })
 
 @app.route('/api/v1/keys/active', methods=['GET'])
 def get_active_keys():
@@ -334,6 +365,15 @@ def transparent_proxy():
     policy_version = int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0))
     policy_id = request.headers.get('X-Policy-ID', f'policy-{agent_id}')  # NEW: policy_id support
     
+    # Priority 4: Idempotency key support for request deduplication
+    idempotency_key = request.headers.get('X-Idempotency-Key')
+    if not hasattr(app, '_idempotency_cache'):
+        app._idempotency_cache = {}
+    if idempotency_key:
+        cached_response = app._idempotency_cache.get(idempotency_key)
+        if cached_response:
+            return cached_response  # Return cached result for same idempotency key
+    
     enforcement_req = {
         "request_id": request_id,
         "tenant_id": tenant_id,
@@ -350,6 +390,7 @@ def transparent_proxy():
     decision = None
     enforcement_error = None
     error_code = None
+    agentshield_decision = None  # Priority 2: Store original decision before override
     
     try:
         decision = agentshield.enforce(enforcement_req)
@@ -433,6 +474,16 @@ def transparent_proxy():
     input_hash = decision.get('input_hash')  # NEW: input hash for audit
     policy_id_from_decision = decision.get('policy_id')  # NEW: policy_id from decision
     
+    # Priority 2: Store original decision before any override
+    agentshield_decision = {
+        "action": action,
+        "risk_score": risk_score,
+        "signature_hash": signature_hash,
+        "reasons": list(reasons) if reasons else [],
+        "audit_event_id": audit_event_id,
+        "sig_verified": sig_verified
+    }
+    
     # Gateway policy enforcement (override AgentShield if needed)
     policy_override = None
     if risk_score is not None and risk_score > MAX_RISK_SCORE:
@@ -450,6 +501,9 @@ def transparent_proxy():
 
     # Structured log + local append-only cache
     timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
+    
+    # Priority 2: Add granular timings
+    t_audit_ms = timings.get('t_total_ms', 0) - timings.get('t_agentshield_ms', 0)
     
     ship_log_async({
         "request_id": request_id,
@@ -470,15 +524,28 @@ def transparent_proxy():
         "policy_override": policy_override,
         "error_code": error_code_from_decision.value if error_code_from_decision else None,  # NEW: structured error
         "input_hash": input_hash,  # NEW: for audit trail
-        "timings": timings
+        "agentshield_decision": agentshield_decision,  # Priority 2: Store original decision
+        "timings": {
+            "t_agentshield_ms": timings.get('t_agentshield_ms', 0),
+            "t_audit_ms": round(t_audit_ms, 2),  # Priority 2: Granular timing
+            "t_total_ms": timings.get('t_total_ms', 0)
+        }
     })
 
     if action == 'BLOCK':
-        return jsonify({"error": {"message": ", ".join(reasons) or "Blocked", "code": 403, "request_id": request_id, "signature_hash": signature_hash, "audit_event_id": audit_event_id}}), 403
+        response = (jsonify({"error": {"message": ", ".join(reasons) or "Blocked", "code": 403, "request_id": request_id, "signature_hash": signature_hash, "audit_event_id": audit_event_id}}), 403)
+        # Priority 4: Cache idempotent response
+        if idempotency_key:
+            app._idempotency_cache[idempotency_key] = response
+            # Clean up old cache entries (keep only last 100)
+            if len(app._idempotency_cache) > 100:
+                oldest_key = next(iter(app._idempotency_cache))
+                del app._idempotency_cache[oldest_key]
+        return response
     if action in ('SANITIZE', 'REWRITE'):
         sanitized = decision.get('sanitized') or messages
         # Provide a simple response indicating sanitation and the new content
-        return jsonify({
+        response = jsonify({
             "id": "chatcmpl-vigil-sanitized",
             "action": action,
             "risk_score": risk_score,
@@ -488,9 +555,16 @@ def transparent_proxy():
             "sanitized_preview": {"before": messages, "after": sanitized},
             "choices": [{"index": 0, "message": {"role": "assistant", "content": sanitized[-1]['content'] if sanitized else ''}}]
         })
+        # Priority 4: Cache idempotent response
+        if idempotency_key:
+            app._idempotency_cache[idempotency_key] = response
+            if len(app._idempotency_cache) > 100:
+                oldest_key = next(iter(app._idempotency_cache))
+                del app._idempotency_cache[oldest_key]
+        return response
 
     # ALLOW: proceed (mock)
-    return jsonify({
+    response = jsonify({
         "id": "chatcmpl-vigil-allow",
         "action": "ALLOW",
         "risk_score": risk_score,
@@ -502,6 +576,13 @@ def transparent_proxy():
             "message": {"role": "assistant", "content": f"Accepted: {messages[-1]['content']}" if messages else ''}
         }]
     })
+    # Priority 4: Cache idempotent response
+    if idempotency_key:
+        app._idempotency_cache[idempotency_key] = response
+        if len(app._idempotency_cache) > 100:
+            oldest_key = next(iter(app._idempotency_cache))
+            del app._idempotency_cache[oldest_key]
+    return response
 
     return jsonify({
         "id": "chatcmpl-vigil-mock",

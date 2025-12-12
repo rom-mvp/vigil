@@ -2,7 +2,9 @@ import base64
 import hashlib
 import json
 import os
+import threading
 import time
+from collections import defaultdict
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -33,6 +35,65 @@ class VigilErrorCode(str, Enum):
     KEY_NOT_FOUND = "KEY_NOT_FOUND"
 
 
+class VigilMetrics:
+    """Priority 5: Observability - Metrics collection for decisions and errors."""
+    
+    def __init__(self):
+        self.decision_outcomes = defaultdict(int)  # action -> count
+        self.error_codes = defaultdict(int)  # error_code -> count
+        self.latencies = []  # all latencies in ms
+        self.latency_p50 = 0.0
+        self.latency_p95 = 0.0
+        self.latency_p99 = 0.0
+        self._lock = threading.Lock()
+    
+    def record_decision(self, action: str):
+        """Record a decision outcome."""
+        with self._lock:
+            self.decision_outcomes[action] += 1
+    
+    def record_error(self, error_code: str):
+        """Record an error code."""
+        with self._lock:
+            self.error_codes[error_code] += 1
+    
+    def record_latency(self, latency_ms: float):
+        """Record a latency measurement."""
+        with self._lock:
+            self.latencies.append(latency_ms)
+            # Keep only last 1000 measurements
+            if len(self.latencies) > 1000:
+                self.latencies = self.latencies[-1000:]
+            self._compute_percentiles()
+    
+    def _compute_percentiles(self):
+        """Compute p50, p95, p99 percentiles."""
+        if not self.latencies:
+            self.latency_p50 = 0.0
+            self.latency_p95 = 0.0
+            self.latency_p99 = 0.0
+            return
+        
+        sorted_latencies = sorted(self.latencies)
+        n = len(sorted_latencies)
+        
+        self.latency_p50 = sorted_latencies[int(n * 0.50)]
+        self.latency_p95 = sorted_latencies[int(n * 0.95)] if n > 1 else sorted_latencies[0]
+        self.latency_p99 = sorted_latencies[int(n * 0.99)] if n > 1 else sorted_latencies[0]
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get current metrics."""
+        with self._lock:
+            return {
+                "decision_outcomes": dict(self.decision_outcomes),
+                "error_codes": dict(self.error_codes),
+                "latency_p50_ms": round(self.latency_p50, 2),
+                "latency_p95_ms": round(self.latency_p95, 2),
+                "latency_p99_ms": round(self.latency_p99, 2),
+                "samples_count": len(self.latencies)
+            }
+
+
 class AgentShieldClient:
     def __init__(self):
         self.base_url = os.getenv("AGENTSHIELD_URL", "http://localhost:9000")
@@ -51,6 +112,12 @@ class AgentShieldClient:
         self._jwks_cache_time: float = 0
         self._jwks_cache_ttl = int(os.getenv("AGENTSHIELD_JWKS_TTL", "3600"))
         self._pubkey = self._load_pubkey()
+        
+        # Priority 5: Metrics and observability
+        self.metrics = VigilMetrics()
+        
+        # Priority 5: Background key refresh thread
+        self._start_background_key_refresh()
 
     def _fetch_jwks(self) -> Dict:
         if not self.jwks_url:
@@ -93,6 +160,19 @@ class AgentShieldClient:
                     # Future: decode RSA from JWK if needed
                     pass
         return None
+
+    def _start_background_key_refresh(self):
+        """Priority 5: Observability - Background thread to refresh keys automatically."""
+        def _refresh():
+            while True:
+                try:
+                    time.sleep(self._jwks_cache_ttl // 2)  # Refresh every half-TTL
+                    self._fetch_jwks()  # Will update cache if needed
+                except Exception:
+                    pass  # Silently fail, will retry on next cycle
+        
+        thread = threading.Thread(target=_refresh, daemon=True)
+        thread.start()
 
     @staticmethod
     def compute_input_hash(request_data: Dict[str, Any]) -> str:
@@ -348,17 +428,26 @@ class AgentShieldClient:
                 decision["input_hash"] = input_hash
                 decision["policy_id"] = enforcement_request.get("policy_id")
                 
+                # Priority 5: Record metrics
+                action = decision.get("action")
+                if action:
+                    self.metrics.record_decision(action)
+                
                 return decision
                 
             except requests.exceptions.Timeout as e:
                 last_exception = e
                 error_code = VigilErrorCode.AGENTSHIELD_TIMEOUT
+                # Priority 5: Record error metric
+                self.metrics.record_error(error_code.value)
                 if attempt < self.max_retries:
                     continue  # Retry on timeout
                 break
             except requests.exceptions.ConnectionError as e:
                 last_exception = e
                 error_code = VigilErrorCode.AGENTSHIELD_UNREACHABLE
+                # Priority 5: Record error metric
+                self.metrics.record_error(error_code.value)
                 if attempt < self.max_retries:
                     continue  # Retry on connection error
                 break
@@ -366,16 +455,22 @@ class AgentShieldClient:
                 # Non-retryable HTTP errors (4xx, 5xx)
                 last_exception = e
                 error_code = VigilErrorCode.AGENTSHIELD_UNREACHABLE
+                # Priority 5: Record error metric
+                self.metrics.record_error(error_code.value)
                 break
             except ValueError as e:
                 # Schema or verification errors - don't retry
                 last_exception = e
                 error_code = getattr(e, 'vigil_error_code', VigilErrorCode.DECISION_SCHEMA_INVALID)
+                # Priority 5: Record error metric
+                self.metrics.record_error(error_code.value)
                 break
             except Exception as e:
                 # Other errors - don't retry
                 last_exception = e
                 error_code = getattr(e, 'vigil_error_code', VigilErrorCode.AGENTSHIELD_UNREACHABLE)
+                # Priority 5: Record error metric
+                self.metrics.record_error(error_code.value)
                 break
         
         # All retries exhausted or non-retryable error
