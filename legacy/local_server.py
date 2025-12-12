@@ -59,6 +59,49 @@ def ship_log_async(payload):
 def heartbeat():
     return jsonify({"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat()})
 
+@app.route('/api/v1/audit/logs', methods=['GET'])
+def get_audit_logs():
+    """Return recent audit logs from local append-only cache (tail)."""
+    path = os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl')
+    limit = int(request.args.get('limit', '100'))
+    logs = []
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 65536), os.SEEK_SET)  # read last chunk
+            lines = f.read().splitlines()
+            for line in lines[-limit:]:
+                try:
+                    logs.append(json.loads(line.decode('utf-8')))
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return jsonify({"logs": logs})
+
+@app.route('/api/v1/policies/update', methods=['POST'])
+def update_policy():
+    """Proxy policy updates to AgentShield if available; echo otherwise."""
+    body = request.json or {}
+    try:
+        url = f"{os.getenv('AGENTSHIELD_URL', 'http://localhost:9000')}/v1/policies/update"
+        r = requests.post(url, json=body, timeout=float(os.getenv('AGENTSHIELD_TIMEOUT_MS', '3000'))/1000.0)
+        return jsonify(r.json()), r.status_code
+    except Exception:
+        # Mirror minimal policy_version into app state
+        pv = body.get('policy_version')
+        if pv is not None:
+            try:
+                pv = int(pv)
+                agent_id = body.get('agent_id', 'global')
+                if not hasattr(app, '_policy_versions'):
+                    app._policy_versions = {}
+                app._policy_versions[agent_id] = max(app._policy_versions.get(agent_id, -1), pv)
+            except Exception:
+                pass
+        return jsonify({"status": "ok", "mirrored": True, "policy_version": pv}), 200
+
 @app.route('/v1/chat/completions', methods=['POST'])
 def transparent_proxy():
     # mTLS client cert enforcement (stub): require header when enabled
