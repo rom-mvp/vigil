@@ -12,7 +12,7 @@ sys.path.append(os.getcwd())
 from firewall_engine import FirewallEngine
 from pii_engine import PIIEngine
 from merkle_log_store import MerkleLogStore
-from agentshield_client import AgentShieldClient
+from agentshield_client import AgentShieldClient, VigilErrorCode
 
 app = Flask(__name__)
 firewall = FirewallEngine()
@@ -31,7 +31,7 @@ VIGIL_ENVIRONMENT = os.environ.get('VIGIL_ENVIRONMENT', 'local')
 # Policy enforcement thresholds
 MAX_RISK_SCORE = float(os.environ.get('MAX_RISK_SCORE', '0.30'))
 DISALLOWED_REASONS = set(os.environ.get('DISALLOWED_REASONS', 'credential-exfil,tenant-boundary,privilege-escalation').split(','))
-AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '3000')) / 1000.0
+AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '1000')) / 1000.0  # Reduced to 1000ms
 
 # Simple per-API-key token buckets (in-memory)
 _rate_buckets = {}
@@ -332,20 +332,24 @@ def transparent_proxy():
     FALLBACK = os.environ.get('AGENTSHIELD_REQUIRED', 'true').lower() != 'true'
     tenant_id = request.headers.get('X-Tenant-ID', 'local-docker')
     policy_version = int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0))
+    policy_id = request.headers.get('X-Policy-ID', f'policy-{agent_id}')  # NEW: policy_id support
     
     enforcement_req = {
         "request_id": request_id,
         "tenant_id": tenant_id,
         "agent_id": agent_id,
+        "policy_id": policy_id,  # NEW
         "policy_version": policy_version,
         "environment": VIGIL_ENVIRONMENT,
         "messages": messages,
         "metadata": body.get('metadata', {})
+        # Note: timestamp_ms, ttl_ms, and input_hash are auto-added by AgentShieldClient
     }
     
     t_agentshield_start = time.time()
     decision = None
     enforcement_error = None
+    error_code = None
     
     try:
         decision = agentshield.enforce(enforcement_req)
@@ -353,8 +357,9 @@ def transparent_proxy():
     except Exception as e:
         timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
         enforcement_error = str(e)
+        error_code = getattr(e, 'vigil_error_code', VigilErrorCode.AGENTSHIELD_UNREACHABLE)
         if not FALLBACK:
-            # Audit the failure
+            # Audit the failure with structured error code
             ship_log_async({
                 "request_id": request_id,
                 "timestamp": datetime.datetime.utcnow().isoformat(),
@@ -362,6 +367,7 @@ def transparent_proxy():
                 "status": "ERROR",
                 "agent_id": agent_id,
                 "tenant_id": tenant_id,
+                "policy_id": policy_id,  # NEW
                 "policy_version": policy_version,
                 "environment": VIGIL_ENVIRONMENT,
                 "risk_score": None,
@@ -371,9 +377,11 @@ def transparent_proxy():
                 "sig_verified": False,
                 "sig_key_id": None,
                 "error": enforcement_error,
+                "error_code": error_code.value if error_code else None,  # NEW: structured error code
+                "input_hash": None,
                 "timings": timings
             })
-            return jsonify({"error": {"message": "AgentShield unavailable or decision verification failed", "code": 503, "request_id": request_id}}), 503
+            return jsonify({"error": {"message": "AgentShield unavailable or decision verification failed", "code": 503, "request_id": request_id, "error_code": error_code.value if error_code else None}}), 503
         # Fallback path: run local firewall + PII
         fallback_used = True
         for msg in messages:
@@ -389,11 +397,14 @@ def transparent_proxy():
                         "status": "BLOCK",
                         "agent_id": agent_id,
                         "tenant_id": tenant_id,
+                        "policy_id": policy_id,  # NEW
                         "policy_version": policy_version,
                         "environment": VIGIL_ENVIRONMENT,
                         "risk_score": None,
                         "reasons": [check['reason']],
                         "fallback_used": True,
+                        "error_code": None,
+                        "input_hash": None,
                         "timings": timings
                     })
                     return jsonify({"error": {"message": f"Blocked (fallback): {check['reason']}", "code": 403, "request_id": request_id}}), 403
@@ -418,6 +429,9 @@ def transparent_proxy():
     reasons = decision.get('reasons', [])
     sig_verified = decision.get('sig_verified', False)
     sig_key_id = decision.get('key_id')
+    error_code_from_decision = decision.get('error_code')  # NEW: error code from verification
+    input_hash = decision.get('input_hash')  # NEW: input hash for audit
+    policy_id_from_decision = decision.get('policy_id')  # NEW: policy_id from decision
     
     # Gateway policy enforcement (override AgentShield if needed)
     policy_override = None
@@ -444,6 +458,7 @@ def transparent_proxy():
         "status": action,
         "agent_id": agent_id,
         "tenant_id": tenant_id,
+        "policy_id": policy_id_from_decision or policy_id,  # NEW
         "policy_version": policy_version,
         "environment": VIGIL_ENVIRONMENT,
         "risk_score": risk_score,
@@ -453,6 +468,8 @@ def transparent_proxy():
         "sig_verified": sig_verified,
         "sig_key_id": sig_key_id,
         "policy_override": policy_override,
+        "error_code": error_code_from_decision.value if error_code_from_decision else None,  # NEW: structured error
+        "input_hash": input_hash,  # NEW: for audit trail
         "timings": timings
     })
 
