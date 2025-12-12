@@ -72,6 +72,12 @@ def get_audit_logs():
     """Return recent audit logs from local append-only cache (tail)."""
     path = os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl')
     limit = int(request.args.get('limit', '100'))
+    tenant_id = request.args.get('tenant_id')
+    agent_id = request.args.get('agent_id')
+    decision = request.args.get('decision')
+    from_ts = request.args.get('from')
+    to_ts = request.args.get('to')
+    
     logs = []
     try:
         with open(path, 'rb') as f:
@@ -81,12 +87,53 @@ def get_audit_logs():
             lines = f.read().splitlines()
             for line in lines[-limit:]:
                 try:
-                    logs.append(json.loads(line.decode('utf-8')))
+                    entry = json.loads(line.decode('utf-8'))
+                    log_entry = entry.get('entry', entry)
+                    
+                    # Apply filters
+                    if tenant_id and log_entry.get('tenant_id') != tenant_id:
+                        continue
+                    if agent_id and log_entry.get('agent_id') != agent_id:
+                        continue
+                    if decision and log_entry.get('status') != decision:
+                        continue
+                    if from_ts:
+                        try:
+                            if datetime.datetime.fromisoformat(log_entry.get('timestamp', '')) < datetime.datetime.fromisoformat(from_ts):
+                                continue
+                        except:
+                            pass
+                    if to_ts:
+                        try:
+                            if datetime.datetime.fromisoformat(log_entry.get('timestamp', '')) > datetime.datetime.fromisoformat(to_ts):
+                                continue
+                        except:
+                            pass
+                    
+                    logs.append(entry)
                 except Exception:
                     continue
     except FileNotFoundError:
         pass
     return jsonify({"logs": logs})
+
+@app.route('/api/v1/audit/logs/<request_id>', methods=['GET'])
+def get_audit_log_detail(request_id):
+    """Get detailed view of a specific audit log entry."""
+    path = os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl')
+    try:
+        with open(path, 'rb') as f:
+            for line in f:
+                try:
+                    entry = json.loads(line.decode('utf-8'))
+                    log_entry = entry.get('entry', entry)
+                    if log_entry.get('request_id') == request_id:
+                        return jsonify(entry)
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return jsonify({"error": "Log entry not found"}), 404
 
 @app.route('/api/v1/policies/update', methods=['POST'])
 def update_policy():
@@ -109,6 +156,131 @@ def update_policy():
             except Exception:
                 pass
         return jsonify({"status": "ok", "mirrored": True, "policy_version": pv}), 200
+
+@app.route('/api/v1/policies', methods=['GET'])
+def get_policies():
+    """Get current policy configuration."""
+    return jsonify({
+        "max_risk_score": MAX_RISK_SCORE,
+        "disallowed_reasons": list(DISALLOWED_REASONS),
+        "timeout_ms": AGENTSHIELD_TIMEOUT_SEC * 1000,
+        "rate_limit_rps": RATE_LIMIT_RPS,
+        "require_mtls": REQUIRE_MTLS,
+        "signature_verification": True,  # Always enabled
+        "fail_closed": True  # Always enabled
+    })
+
+@app.route('/api/v1/keys/active', methods=['GET'])
+def get_active_keys():
+    """Get active signing keys from AgentShield JWKS."""
+    try:
+        keys_data = agentshield._get_keys()
+        return jsonify({"keys": keys_data.get('keys', [])})
+    except Exception as e:
+        return jsonify({"error": str(e), "keys": []}), 500
+
+@app.route('/api/v1/compliance/export', methods=['POST'])
+def export_compliance_logs():
+    """Export audit logs for compliance (JSON/CSV)."""
+    body = request.json or {}
+    format_type = body.get('format', 'json')
+    from_ts = body.get('from')
+    to_ts = body.get('to')
+    
+    # Use existing audit logs endpoint with filters
+    params = {'limit': 10000}
+    if from_ts:
+        params['from'] = from_ts
+    if to_ts:
+        params['to'] = to_ts
+    
+    path = os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl')
+    logs = []
+    try:
+        with open(path, 'rb') as f:
+            for line in f:
+                try:
+                    entry = json.loads(line.decode('utf-8'))
+                    logs.append(entry)
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    
+    return jsonify({"logs": logs, "count": len(logs), "format": format_type})
+
+@app.route('/api/v1/compliance/verify-merkle', methods=['GET'])
+def verify_merkle_chain():
+    """Verify Merkle chain integrity."""
+    path = os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl')
+    verified_count = 0
+    failed_entries = []
+    
+    try:
+        prev_hash = None
+        with open(path, 'rb') as f:
+            for idx, line in enumerate(f):
+                try:
+                    entry = json.loads(line.decode('utf-8'))
+                    
+                    # Verify prev_hash matches
+                    if prev_hash != entry.get('prev_hash'):
+                        failed_entries.append({
+                            "line": idx,
+                            "expected_prev": prev_hash,
+                            "actual_prev": entry.get('prev_hash')
+                        })
+                    
+                    # Recompute hash and verify
+                    import hashlib
+                    m = hashlib.sha256()
+                    m.update(json.dumps(entry.get('entry', {}), sort_keys=True).encode('utf-8'))
+                    if prev_hash:
+                        m.update(prev_hash.encode('utf-8'))
+                    computed_hash = m.hexdigest()
+                    
+                    if computed_hash != entry.get('hash'):
+                        failed_entries.append({
+                            "line": idx,
+                            "expected_hash": computed_hash,
+                            "actual_hash": entry.get('hash')
+                        })
+                    else:
+                        verified_count += 1
+                    
+                    prev_hash = entry.get('hash')
+                except Exception as e:
+                    failed_entries.append({"line": idx, "error": str(e)})
+    except FileNotFoundError:
+        return jsonify({"error": "No audit log found"}), 404
+    
+    return jsonify({
+        "verified": len(failed_entries) == 0,
+        "verified_entries": verified_count,
+        "failed_entries": failed_entries,
+        "total": verified_count + len(failed_entries)
+    })
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint."""
+    return jsonify({"status": "healthy", "timestamp": datetime.datetime.utcnow().isoformat()})
+
+@app.route('/ready', methods=['GET'])
+def ready():
+    """Readiness check endpoint."""
+    # Check if AgentShield is reachable
+    try:
+        url = f"{os.getenv('AGENTSHIELD_URL', 'http://localhost:9000')}/health"
+        r = requests.get(url, timeout=2)
+        agentshield_ready = r.status_code == 200
+    except:
+        agentshield_ready = False
+    
+    return jsonify({
+        "ready": True,  # Vigil is always ready (can fall back)
+        "agentshield_available": agentshield_ready
+    })
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def transparent_proxy():

@@ -50,9 +50,13 @@ services:
       
       # Logging
       - LOG_LEVEL=INFO
+      - APPEND_LOG_PATH=/app/logs/vigil_audit.jsonl
+      - LOG_SERVER_URL=http://vigil-dashboard:3000/api/v1/audit/ingest
     depends_on:
       agentshield:
         condition: service_healthy
+    volumes:
+      - vigil-logs:/app/logs
     networks:
       - vigil-network
     healthcheck:
@@ -63,6 +67,36 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # Vigil Dashboard (Audit UI)
+  vigil-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: vigil-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - DASHBOARD_SECRET_KEY=${DASHBOARD_SECRET_KEY:-changeme-in-production}
+      - VIGIL_GATEWAY_URL=http://vigil:8000
+      - APPEND_LOG_PATH=/app/logs/vigil_audit.jsonl
+    volumes:
+      - vigil-logs:/app/logs:ro  # Read-only access to audit logs
+    networks:
+      - vigil-network
+    depends_on:
+      - vigil
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/login.html"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  vigil-logs:
+    driver: local
+
 networks:
   vigil-network:
     driver: bridge
+

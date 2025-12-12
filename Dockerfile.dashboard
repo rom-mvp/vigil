@@ -1,0 +1,35 @@
+# Vigil Dashboard - Dockerfile
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 vigil && \
+    mkdir -p /app /app/logs && \
+    chown -R vigil:vigil /app
+
+WORKDIR /app
+
+# Install Flask
+RUN pip install --no-cache-dir flask
+
+# Copy dashboard files
+COPY --chown=vigil:vigil dashboard_server.py .
+COPY --chown=vigil:vigil dashboard.html .
+
+# Switch to non-root user
+USER vigil
+
+# Expose dashboard port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/login.html || exit 1
+
+# Run the dashboard server
+CMD ["python", "dashboard_server.py"]

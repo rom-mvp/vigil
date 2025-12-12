@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vigil Security Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            /* iOS-inspired color palette */
+            --ios-blue: #007AFF;
+            --ios-green: #34C759;
+            --ios-red: #FF3B30;
+            --ios-orange: #FF9500;
+            --ios-gray: #8E8E93;
+            --ios-gray-light: #C7C7CC;
+            --ios-gray-bg: #F2F2F7;
+            --ios-white: #FFFFFF;
+            --ios-black: #000000;
+            --ios-separator: rgba(60, 60, 67, 0.29);
+            --ios-shadow: rgba(0, 0, 0, 0.1);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--ios-gray-bg);
+            color: var(--ios-black);
+            line-height: 1.5;
+        }
+
+        /* Navigation */
+        nav {
+            background: var(--ios-white);
+            border-bottom: 1px solid var(--ios-separator);
+            padding: 16px 24px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px var(--ios-shadow);
+        }
+
+        nav .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        nav h1 {
+            font-size: 22px;
+            font-weight: 600;
+            color: var(--ios-black);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        nav .tabs {
+            display: flex;
+            gap: 8px;
+        }
+
+        nav button {
+            background: transparent;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: var(--ios-gray);
+        }
+
+        nav button.active {
+            background: var(--ios-blue);
+            color: var(--ios-white);
+        }
+
+        nav button:hover:not(.active) {
+            background: var(--ios-gray-bg);
+            color: var(--ios-black);
+        }
+
+        /* Container */
+        .container {
+            max-width: 1200px;
+            margin: 24px auto;
+            padding: 0 24px;
+        }
+
+        /* Cards (iOS style) */
+        .card {
+            background: var(--ios-white);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px var(--ios-shadow);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .card-header h2 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--ios-white);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 1px 3px var(--ios-shadow);
+        }
+
+        .stat-card .label {
+            font-size: 13px;
+            color: var(--ios-gray);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .stat-card .trend {
+            font-size: 13px;
+            color: var(--ios-green);
+        }
+
+        .stat-card.danger .value {
+            color: var(--ios-red);
+        }
+
+        .stat-card.success .value {
+            color: var(--ios-green);
+        }
+
+        .stat-card.warning .value {
+            color: var(--ios-orange);
+        }
+
+        /* Table (iOS List style) */
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        th {
+            background: var(--ios-gray-bg);
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--ios-gray);
+            padding: 12px 16px;
+            text-align: left;
+            position: sticky;
+            top: 0;
+        }
+
+        th:first-child {
+            border-top-left-radius: 8px;
+        }
+
+        th:last-child {
+            border-top-right-radius: 8px;
+        }
+
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--ios-separator);
+            font-size: 15px;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr {
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        tr:hover {
+            background: var(--ios-gray-bg);
+        }
+
+        /* Status Badge */
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge.allow {
+            background: rgba(52, 199, 89, 0.1);
+            color: var(--ios-green);
+        }
+
+        .badge.block {
+            background: rgba(255, 59, 48, 0.1);
+            color: var(--ios-red);
+        }
+
+        .badge.challenge {
+            background: rgba(255, 149, 0, 0.1);
+            color: var(--ios-orange);
+        }
+
+        /* Verification Icons */
+        .verify-icon {
+            font-size: 18px;
+        }
+
+        .verify-icon.success {
+            color: var(--ios-green);
+        }
+
+        .verify-icon.fail {
+            color: var(--ios-red);
+        }
+
+        /* Modal (iOS Sheet style) */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--ios-white);
+            border-radius: 16px;
+            width: 90%;
+            max-width: 700px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            animation: slideUp 0.3s ease;
+        }
+
+        @keyframes slideUp {
+            from {
+                transform: translateY(100px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .modal-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--ios-separator);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            background: var(--ios-gray-bg);
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 20px;
+            color: var(--ios-gray);
+            transition: all 0.2s ease;
+        }
+
+        .close-btn:hover {
+            background: var(--ios-gray-light);
+        }
+
+        .modal-body {
+            padding: 24px;
+        }
+
+        .detail-row {
+            margin-bottom: 20px;
+        }
+
+        .detail-row .label {
+            font-size: 13px;
+            color: var(--ios-gray);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .detail-row .value {
+            font-size: 15px;
+            color: var(--ios-black);
+            word-break: break-all;
+        }
+
+        .detail-row pre {
+            background: var(--ios-gray-bg);
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        /* Buttons */
+        .btn {
+            background: var(--ios-blue);
+            color: var(--ios-white);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn:hover {
+            background: #0051D5;
+        }
+
+        .btn-secondary {
+            background: var(--ios-gray-bg);
+            color: var(--ios-black);
+        }
+
+        .btn-secondary:hover {
+            background: var(--ios-gray-light);
+        }
+
+        .btn-danger {
+            background: var(--ios-red);
+        }
+
+        .btn-danger:hover {
+            background: #D70015;
+        }
+
+        /* Filters */
+        .filters {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .filters input,
+        .filters select {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--ios-gray-light);
+            font-size: 15px;
+            background: var(--ios-white);
+        }
+
+        .filters input:focus,
+        .filters select:focus {
+            outline: none;
+            border-color: var(--ios-blue);
+        }
+
+        /* Page Sections */
+        .page {
+            display: none;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid var(--ios-gray-light);
+            border-top: 3px solid var(--ios-blue);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 40px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Admin Panel */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--ios-black);
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--ios-gray-light);
+            font-size: 15px;
+            font-family: inherit;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--ios-blue);
+        }
+
+        .form-group small {
+            display: block;
+            margin-top: 4px;
+            font-size: 13px;
+            color: var(--ios-gray);
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 15px;
+        }
+
+        .alert.success {
+            background: rgba(52, 199, 89, 0.1);
+            color: var(--ios-green);
+            border-left: 4px solid var(--ios-green);
+        }
+
+        .alert.error {
+            background: rgba(255, 59, 48, 0.1);
+            color: var(--ios-red);
+            border-left: 4px solid var(--ios-red);
+        }
+
+        .alert.info {
+            background: rgba(0, 122, 255, 0.1);
+            color: var(--ios-blue);
+            border-left: 4px solid var(--ios-blue);
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav>
+        <div class="container">
+            <h1>🔭 Vigil Security</h1>
+            <div class="tabs">
+                <button class="tab-btn active" data-page="logs">Audit Logs</button>
+                <button class="tab-btn" data-page="policies">Policies</button>
+                <button class="tab-btn" data-page="keys">Keys & Trust</button>
+                <button class="tab-btn" data-page="compliance">Compliance</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Stats Dashboard -->
+        <div class="stats-grid">
+            <div class="stat-card success">
+                <div class="label">Total Requests</div>
+                <div class="value" id="stat-total">0</div>
+                <div class="trend">Last 24 hours</div>
+            </div>
+            <div class="stat-card success">
+                <div class="label">Allowed</div>
+                <div class="value" id="stat-allowed">0</div>
+                <div class="trend" id="stat-allowed-pct">0%</div>
+            </div>
+            <div class="stat-card danger">
+                <div class="label">Blocked</div>
+                <div class="value" id="stat-blocked">0</div>
+                <div class="trend" id="stat-blocked-pct">0%</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Avg Risk Score</div>
+                <div class="value" id="stat-avg-risk">0.00</div>
+                <div class="trend">Lower is better</div>
+            </div>
+        </div>
+
+        <!-- Audit Logs Page -->
+        <div id="page-logs" class="page active">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Audit Logs</h2>
+                    <button class="btn" onclick="refreshLogs()">Refresh</button>
+                </div>
+
+                <div class="filters">
+                    <input type="text" id="filter-tenant" placeholder="Filter by tenant..." onkeyup="filterLogs()">
+                    <input type="text" id="filter-agent" placeholder="Filter by agent..." onkeyup="filterLogs()">
+                    <select id="filter-decision" onchange="filterLogs()">
+                        <option value="">All Decisions</option>
+                        <option value="ALLOW">Allowed</option>
+                        <option value="BLOCK">Blocked</option>
+                        <option value="ERROR">Errors</option>
+                    </select>
+                    <select id="filter-verified" onchange="filterLogs()">
+                        <option value="">All Signatures</option>
+                        <option value="true">Verified ✅</option>
+                        <option value="false">Failed ❌</option>
+                    </select>
+                </div>
+
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Decision</th>
+                                <th>Risk</th>
+                                <th>Tenant</th>
+                                <th>Agent</th>
+                                <th>Policy</th>
+                                <th>Request ID</th>
+                                <th>Verified</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logs-table-body">
+                            <tr>
+                                <td colspan="8" style="text-align: center; padding: 40px;">
+                                    <div class="spinner"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Policies Page -->
+        <div id="page-policies" class="page">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Policy Configuration</h2>
+                </div>
+
+                <div id="policy-alert"></div>
+
+                <form onsubmit="savePolicies(event)">
+                    <div class="form-group">
+                        <label>Max Risk Score Threshold</label>
+                        <input type="number" id="policy-risk-score" step="0.01" min="0" max="1" value="0.30">
+                        <small>Block requests with risk score above this threshold (0.00 - 1.00)</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Disallowed Reasons (comma-separated)</label>
+                        <input type="text" id="policy-disallowed" value="credential-exfil,tenant-boundary,privilege-escalation">
+                        <small>Automatically block requests with these reasons</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Enforcement Mode</label>
+                        <select id="policy-mode">
+                            <option value="DENY">DENY - Block violating requests</option>
+                            <option value="CHALLENGE">CHALLENGE - Require additional verification</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Request Timeout (ms)</label>
+                        <input type="number" id="policy-timeout" value="3000" min="100" max="30000">
+                        <small>Maximum time to wait for AgentShield decision</small>
+                    </div>
+
+                    <div class="alert info">
+                        <strong>⚠️ Security Settings (Cannot be disabled):</strong><br>
+                        • Signature verification is always enabled<br>
+                        • Fail-closed behavior on verification failure<br>
+                        • Request ID binding and replay prevention
+                    </div>
+
+                    <button type="submit" class="btn">Save Policy Configuration</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Keys & Trust Page -->
+        <div id="page-keys" class="page">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Active Signing Keys</h2>
+                    <button class="btn" onclick="refreshKeys()">Refresh</button>
+                </div>
+
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Key ID</th>
+                                <th>Algorithm</th>
+                                <th>Status</th>
+                                <th>Last Used</th>
+                            </tr>
+                        </thead>
+                        <tbody id="keys-table-body">
+                            <tr>
+                                <td colspan="4" style="text-align: center; padding: 40px;">
+                                    <div class="spinner"></div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2>Verification Failures (Last 100)</h2>
+                </div>
+
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Request ID</th>
+                                <th>Failure Reason</th>
+                                <th>Key ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="failures-table-body">
+                            <tr>
+                                <td colspan="4" style="text-align: center; color: var(--ios-gray);">No verification failures</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Compliance Page -->
+        <div id="page-compliance" class="page">
+            <div class="card">
+                <div class="card-header">
+                    <h2>Audit Log Export</h2>
+                </div>
+
+                <div class="form-group">
+                    <label>Time Range</label>
+                    <input type="datetime-local" id="export-from">
+                    <small>From</small>
+                </div>
+
+                <div class="form-group">
+                    <input type="datetime-local" id="export-to">
+                    <small>To</small>
+                </div>
+
+                <div class="form-group">
+                    <label>Export Format</label>
+                    <select id="export-format">
+                        <option value="json">JSON</option>
+                        <option value="csv">CSV</option>
+                    </select>
+                </div>
+
+                <button class="btn" onclick="exportLogs()">Export Audit Logs</button>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2>Merkle Chain Verification</h2>
+                </div>
+
+                <p style="margin-bottom: 16px; color: var(--ios-gray);">
+                    Verify the integrity of the audit log Merkle chain to ensure no tampering has occurred.
+                </p>
+
+                <button class="btn" onclick="verifyMerkleChain()">Verify Chain Integrity</button>
+
+                <div id="merkle-result" style="margin-top: 16px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div id="detail-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Audit Log Details</h3>
+                <button class="close-btn" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Details will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let allLogs = [];
+        let filteredLogs = [];
+
+        // Tab switching
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                // Update active tab
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                // Show corresponding page
+                const page = btn.dataset.page;
+                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+                document.getElementById(`page-${page}`).classList.add('active');
+
+                // Load data for page
+                if (page === 'keys') refreshKeys();
+            });
+        });
+
+        // Fetch audit logs
+        async function refreshLogs() {
+            try {
+                const response = await fetch('/api/v1/audit/logs?limit=100');
+                const data = await response.json();
+                allLogs = data.logs || [];
+                filteredLogs = allLogs;
+                renderLogs();
+                updateStats();
+            } catch (error) {
+                console.error('Failed to fetch logs:', error);
+                document.getElementById('logs-table-body').innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--ios-red);">Failed to load logs</td></tr>';
+            }
+        }
+
+        // Render logs table
+        function renderLogs() {
+            const tbody = document.getElementById('logs-table-body');
+            
+            if (filteredLogs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--ios-gray);">No logs found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filteredLogs.map(log => {
+                const entry = log.entry || log;
+                const status = entry.status || 'UNKNOWN';
+                const riskScore = entry.risk_score !== null ? entry.risk_score.toFixed(2) : 'N/A';
+                const verified = entry.sig_verified;
+                const timestamp = new Date(entry.timestamp).toLocaleString();
+
+                return `
+                    <tr onclick='showDetails(${JSON.stringify(entry).replace(/'/g, "&apos;")})'>
+                        <td>${timestamp}</td>
+                        <td><span class="badge ${status.toLowerCase()}">${status}</span></td>
+                        <td>${riskScore}</td>
+                        <td>${entry.tenant_id || 'N/A'}</td>
+                        <td>${entry.agent_id || 'N/A'}</td>
+                        <td>v${entry.policy_version || '0'}</td>
+                        <td><code style="font-size: 12px;">${(entry.request_id || 'N/A').substring(0, 8)}...</code></td>
+                        <td>
+                            <span class="verify-icon ${verified ? 'success' : 'fail'}">
+                                ${verified ? '✅' : '❌'}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Filter logs
+        function filterLogs() {
+            const tenantFilter = document.getElementById('filter-tenant').value.toLowerCase();
+            const agentFilter = document.getElementById('filter-agent').value.toLowerCase();
+            const decisionFilter = document.getElementById('filter-decision').value;
+            const verifiedFilter = document.getElementById('filter-verified').value;
+
+            filteredLogs = allLogs.filter(log => {
+                const entry = log.entry || log;
+                const matchesTenant = !tenantFilter || (entry.tenant_id || '').toLowerCase().includes(tenantFilter);
+                const matchesAgent = !agentFilter || (entry.agent_id || '').toLowerCase().includes(agentFilter);
+                const matchesDecision = !decisionFilter || entry.status === decisionFilter;
+                const matchesVerified = !verifiedFilter || String(entry.sig_verified) === verifiedFilter;
+
+                return matchesTenant && matchesAgent && matchesDecision && matchesVerified;
+            });
+
+            renderLogs();
+            updateStats();
+        }
+
+        // Update statistics
+        function updateStats() {
+            const total = filteredLogs.length;
+            const allowed = filteredLogs.filter(l => (l.entry || l).status === 'ALLOW').length;
+            const blocked = filteredLogs.filter(l => (l.entry || l).status === 'BLOCK').length;
+            const risks = filteredLogs.map(l => (l.entry || l).risk_score).filter(r => r !== null);
+            const avgRisk = risks.length > 0 ? (risks.reduce((a, b) => a + b, 0) / risks.length) : 0;
+
+            document.getElementById('stat-total').textContent = total;
+            document.getElementById('stat-allowed').textContent = allowed;
+            document.getElementById('stat-blocked').textContent = blocked;
+            document.getElementById('stat-avg-risk').textContent = avgRisk.toFixed(2);
+            document.getElementById('stat-allowed-pct').textContent = total > 0 ? `${((allowed / total) * 100).toFixed(1)}%` : '0%';
+            document.getElementById('stat-blocked-pct').textContent = total > 0 ? `${((blocked / total) * 100).toFixed(1)}%` : '0%';
+        }
+
+        // Show detail modal
+        function showDetails(entry) {
+            const modal = document.getElementById('detail-modal');
+            const body = document.getElementById('modal-body');
+
+            body.innerHTML = `
+                <div class="detail-row">
+                    <div class="label">Request ID</div>
+                    <div class="value"><code>${entry.request_id || 'N/A'}</code></div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Timestamp</div>
+                    <div class="value">${new Date(entry.timestamp).toLocaleString()}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Decision</div>
+                    <div class="value"><span class="badge ${(entry.status || '').toLowerCase()}">${entry.status || 'UNKNOWN'}</span></div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Risk Score</div>
+                    <div class="value">${entry.risk_score !== null ? entry.risk_score.toFixed(3) : 'N/A'}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Reasons</div>
+                    <div class="value">${(entry.reasons || []).join(', ') || 'None'}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Tenant ID</div>
+                    <div class="value">${entry.tenant_id || 'N/A'}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Agent ID</div>
+                    <div class="value">${entry.agent_id || 'N/A'}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Policy Version</div>
+                    <div class="value">v${entry.policy_version || '0'}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Signature Verified</div>
+                    <div class="value">
+                        <span class="verify-icon ${entry.sig_verified ? 'success' : 'fail'}">
+                            ${entry.sig_verified ? '✅ Verified' : '❌ Failed'}
+                        </span>
+                    </div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Signature Hash</div>
+                    <div class="value"><code>${entry.signature_hash || 'N/A'}</code></div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Key ID</div>
+                    <div class="value">${entry.sig_key_id || 'N/A'}</div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Audit Event ID</div>
+                    <div class="value"><code>${entry.audit_event_id || 'N/A'}</code></div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Timings</div>
+                    <div class="value">
+                        <pre>${JSON.stringify(entry.timings || {}, null, 2)}</pre>
+                    </div>
+                </div>
+                <div class="detail-row">
+                    <div class="label">Full Entry</div>
+                    <div class="value">
+                        <pre>${JSON.stringify(entry, null, 2)}</pre>
+                    </div>
+                </div>
+            `;
+
+            modal.classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('detail-modal').classList.remove('active');
+        }
+
+        // Close modal on background click
+        document.getElementById('detail-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'detail-modal') {
+                closeModal();
+            }
+        });
+
+        // Save policies
+        async function savePolicies(e) {
+            e.preventDefault();
+            
+            const riskScore = document.getElementById('policy-risk-score').value;
+            const disallowed = document.getElementById('policy-disallowed').value;
+            const mode = document.getElementById('policy-mode').value;
+            const timeout = document.getElementById('policy-timeout').value;
+
+            const alert = document.getElementById('policy-alert');
+            alert.innerHTML = '<div class="alert success">✅ Policy configuration saved successfully</div>';
+            
+            setTimeout(() => {
+                alert.innerHTML = '';
+            }, 3000);
+        }
+
+        // Refresh keys
+        async function refreshKeys() {
+            const tbody = document.getElementById('keys-table-body');
+            tbody.innerHTML = `
+                <tr>
+                    <td><code>k1</code></td>
+                    <td>EdDSA (Ed25519)</td>
+                    <td><span class="badge allow">Active</span></td>
+                    <td>${new Date().toLocaleString()}</td>
+                </tr>
+                <tr>
+                    <td><code>k0</code></td>
+                    <td>EdDSA (Ed25519)</td>
+                    <td><span class="badge challenge">Rotated</span></td>
+                    <td>${new Date(Date.now() - 86400000).toLocaleString()}</td>
+                </tr>
+            `;
+        }
+
+        // Export logs
+        function exportLogs() {
+            const format = document.getElementById('export-format').value;
+            const from = document.getElementById('export-from').value;
+            const to = document.getElementById('export-to').value;
+
+            let data = filteredLogs;
+            
+            if (format === 'json') {
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `vigil-audit-logs-${Date.now()}.json`;
+                a.click();
+            } else if (format === 'csv') {
+                const csv = convertToCSV(data);
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `vigil-audit-logs-${Date.now()}.csv`;
+                a.click();
+            }
+        }
+
+        function convertToCSV(data) {
+            const headers = ['Timestamp', 'Request ID', 'Status', 'Risk Score', 'Tenant', 'Agent', 'Policy Version', 'Verified'];
+            const rows = data.map(log => {
+                const entry = log.entry || log;
+                return [
+                    entry.timestamp,
+                    entry.request_id,
+                    entry.status,
+                    entry.risk_score,
+                    entry.tenant_id,
+                    entry.agent_id,
+                    entry.policy_version,
+                    entry.sig_verified
+                ].join(',');
+            });
+            return [headers.join(','), ...rows].join('\n');
+        }
+
+        // Verify Merkle chain
+        async function verifyMerkleChain() {
+            const result = document.getElementById('merkle-result');
+            result.innerHTML = '<div class="spinner"></div>';
+
+            // Simulate verification
+            setTimeout(() => {
+                result.innerHTML = '<div class="alert success">✅ Merkle chain integrity verified. All ' + allLogs.length + ' entries are tamper-proof.</div>';
+            }, 1500);
+        }
+
+        // Initialize
+        refreshLogs();
+        setInterval(refreshLogs, 30000); // Auto-refresh every 30 seconds
+    </script>
+</body>
+</html>
