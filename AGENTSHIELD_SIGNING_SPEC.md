@@ -8,6 +8,15 @@ All enforcement decisions MUST be signed when `AGENTSHIELD_REQUIRE_SIGNED=true` 
 
 ## Signing Algorithm
 
+### Supported Algorithms
+
+**Primary (Recommended): Ed25519**
+- **Algorithm**: Ed25519 (EdDSA)
+- **No hash required**: Ed25519 is deterministic
+- **Encoding**: Base64 URL-safe (without padding)
+- **Performance**: ~10x faster than RSA
+
+**Legacy: RSA**
 - **Algorithm**: RSA with PKCS#1 v1.5 padding
 - **Hash**: SHA-256
 - **Key size**: 2048-bit minimum (4096-bit recommended for production)
@@ -56,21 +65,47 @@ AgentShield `/v1/enforce` responses MUST include:
   "signature_hash": "merkle_hash_xyz",
   "sanitized": [],
   "signature": "base64url_encoded_signature_without_padding",
-  "key_id": "prod-key-2024-12"
+  "signature_key_id": "prod-key-2024-12",
+  "canonical_payload_hash": "base64url_sha256_hash_of_canonical_payload",
+  "context_echo": {
+    "tenant_id": "prod-tenant",
+    "user_id": "prod-agent",
+    "policy_version": 10
+  }
 }
 ```
 
 **Required fields:**
-- `signature`: Base64 URL-safe encoded RSA signature (strip trailing `=`)
-- `key_id`: Identifies which key was used (enables key rotation)
+- `signature`: Base64 URL-safe encoded signature (strip trailing `=`)
+- `signature_key_id`: Identifies which key was used (enables key rotation)
+- `canonical_payload_hash`: SHA-256 hash of canonical payload (for Ed25519)
+- `context_echo`: Echoed request context for validation
 
 ## Key Management
 
-### Key Distribution
+### JWKS Endpoint (Recommended)
+
+AgentShield SHOULD expose keys at `GET /v1/keys/jwks`:
+
+```json
+{
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "kid": "prod-key-2024-12",
+      "x": "base64url_encoded_public_key"
+    }
+  ]
+}
+```
+
+Vigil fetches JWKS periodically (default TTL: 3600s) and caches keys.
+
+### Static Key Distribution (Legacy)
 - AgentShield provides public keys via:
   1. PEM file at a known path (`AGENTSHIELD_PUBKEY_PATH`)
   2. Inline PEM (`AGENTSHIELD_PUBKEY_PEM`)
-  3. (Future) JWKS endpoint for dynamic key rotation
 
 ### Key Rotation
 - Multiple keys may be active simultaneously (overlapping validity)
@@ -82,23 +117,43 @@ AgentShield `/v1/enforce` responses MUST include:
 - Decisions with unexpected `key_id` are rejected
 - Prevents key-confusion attacks
 
+## Transport Security (mTLS)
+
+Vigil MUST authenticate to AgentShield using mutual TLS:
+
+```bash
+AGENTSHIELD_MTLS_CERT=./certs/vigil_client.crt
+AGENTSHIELD_MTLS_KEY=./certs/vigil_client.key
+```
+
+- AgentShield validates Vigil's client certificate
+- Prevents unauthorized clients from requesting decisions
+- Complements signature verification (defense in depth)
+
 ## Vigil Verification Flow
 
 1. **Receive decision** from AgentShield `/v1/enforce`
-2. **Check required fields**: `signature`, `key_id`
-3. **Validate key_id** matches `AGENTSHIELD_KEY_ID`
-4. **Load pinned public key** from `AGENTSHIELD_PUBKEY_PATH` or `AGENTSHIELD_PUBKEY_PEM`
-5. **Reconstruct canonical payload** using request context + decision fields
-6. **Verify signature** using RSA PKCS#1 v1.5 + SHA-256
+2. **Check required fields**: `signature`, `signature_key_id`
+3. **Load public key**:
+   - If `AGENTSHIELD_JWKS_URL` is set, fetch from JWKS (cached)
+   - Else load pinned key from `AGENTSHIELD_PUBKEY_PATH` or `AGENTSHIELD_PUBKEY_PEM`
+4. **Validate context_echo** (if present): match against request `tenant_id`, `agent_id`, `policy_version`
+5. **Reconstruct verification payload**:
+   - For Ed25519: use `canonical_payload_hash` if provided, else canonical payload
+   - For RSA: canonical payload
+6. **Verify signature** using Ed25519 or RSA PKCS#1 v1.5 + SHA-256
 7. **On success**: Mark `sig_verified=true`, proceed with enforcement
 8. **On failure**: Reject decision, return HTTP 503 (fail closed)
 
 ## Context Binding
 
-The signature includes **request context** to prevent:
-- **Cross-tenant attacks**: Decision for tenant A cannot be replayed for tenant B
-- **Confused deputy**: Decision bound to specific agent/policy cannot be reused
+The signature includes **request context** and decision includes **context_echo** to prevent:
+- **Cross-tenant attacks**: `context_echo.tenant_id` must match request `tenant_id`
+- **Confused deputy**: `context_echo.user_id` must match request `agent_id`
+- **Policy bypass**: `context_echo.policy_version` must match request `policy_version`
 - **Replay attacks**: `request_id` uniqueness enforced
+
+Vigil validates `context_echo` before signature verification.
 
 ## Security Properties
 
@@ -131,8 +186,10 @@ If `key_id` doesn't match `AGENTSHIELD_KEY_ID`:
 ```bash
 # AgentShield
 AGENTSHIELD_REQUIRE_SIGNED=true
-AGENTSHIELD_KEY_ID=prod-key-2024-12
-AGENTSHIELD_PUBKEY_PATH=/etc/vigil/agentshield_prod.pem
+AGENTSHIELD_JWKS_URL=https://agentshield.prod.example.com/v1/keys/jwks
+AGENTSHIELD_JWKS_TTL=3600
+AGENTSHIELD_MTLS_CERT=/etc/vigil/certs/client.crt
+AGENTSHIELD_MTLS_KEY=/etc/vigil/certs/client.key
 
 # Vigil
 VIGIL_ENVIRONMENT=production

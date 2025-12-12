@@ -17,8 +17,12 @@ This document summarizes Vigil's enforcement-first gateway integration with Agen
   2. Payload size guard via `MAX_REQUEST_BYTES`.
   3. Simple per-key rate limiting (`RATE_LIMIT_RPS`).
   4. Policy version monotonicity via `X-Policy-Version`.
-  5. Pre-LLM enforcement by calling AgentShield with `{ request_id, tenant_id, agent_id, policy_version, environment, messages, metadata }`.
-  6. Verify AgentShield decision signature against a pinned public key (`AGENTSHIELD_REQUIRE_SIGNED=true`), matching `key_id`; fail closed on verification errors when AgentShield is required.
+  5. Pre-LLM enforcement by calling AgentShield with `{ request_id, tenant_id, agent_id, policy_version, environment, messages, metadata }` using mTLS client cert if configured.
+  6. Verify AgentShield decision signature:
+     - Fetch public key from JWKS endpoint (`AGENTSHIELD_JWKS_URL`) or use pinned PEM
+     - Validate `context_echo` matches request tenant/agent/policy_version
+     - Verify signature using Ed25519 or RSA against canonical payload hash
+     - Fail closed on verification errors when AgentShield is required
   7. If AgentShield is unavailable or verification fails and `AGENTSHIELD_REQUIRED=false`, fallback to local `FirewallEngine` and `PIIEngine`.
   8. Decision (`BLOCK` | `SANITIZE` | `REWRITE` | `ALLOW`) is enforced, and structured logs are shipped asynchronously.
 
@@ -109,8 +113,13 @@ HTTP/1.1 200
 ## Environment Variables
 
 - `AGENTSHIELD_URL`, `AGENTSHIELD_TIMEOUT_MS`, `AGENTSHIELD_REQUIRED`
+- `AGENTSHIELD_REQUIRE_SIGNED`, `AGENTSHIELD_KEY_ID`
+- `AGENTSHIELD_PUBKEY_PATH`, `AGENTSHIELD_PUBKEY_PEM`
+- `AGENTSHIELD_JWKS_URL`, `AGENTSHIELD_JWKS_TTL`
+- `AGENTSHIELD_MTLS_CERT`, `AGENTSHIELD_MTLS_KEY`
 - `APPEND_LOG_PATH`, `LOG_SERVER_URL`
 - `MAX_REQUEST_BYTES`, `RATE_LIMIT_RPS`, `REQUIRE_MTLS`
+- `VIGIL_ENVIRONMENT`
 
 ## Frontend Notes
 
