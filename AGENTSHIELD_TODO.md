@@ -8,24 +8,51 @@ Vigil dashboard and audit system is **100% complete**. The AgentShield backend n
 
 ## ✅ What AgentShield MUST Provide
 
-### 1. POST /v1/enforce Response Fields
+### 1. POST /v1/enforce Request (What Vigil Sends)
 
-**Currently Required (Verify These Exist):**
+**Updated Request Format:**
 
 ```json
 {
+  "request_id": "req-uuid-12345",
+  "tenant_id": "ent-tenant",
+  "agent_id": "ent-agent",
+  "policy_id": "policy-abc",                      // ⚠️ NEW FIELD
+  "policy_version": "v2",
+  "environment": "production",
+  "timestamp_ms": 1710000000000,                  // ⚠️ milliseconds
+  "ttl_ms": 300000,                               // ⚠️ NEW FIELD (5 minutes)
+  "input_hash": "sha256-hash-of-request",         // ⚠️ NEW FIELD (critical)
+  "messages": [
+    {"role": "user", "content": "Hello"}
+  ],
+  "metadata": {}
+}
+```
+
+### 2. POST /v1/enforce Response (What AgentShield Returns)
+
+**Updated Response Format:**
+
+```json
+{
+  "schema_version": "as_decision_v1",             // ⚠️ NEW FIELD
   "action": "ALLOW",                              // ✅ EXISTS
   "risk_score": 0.12,                             // ✅ EXISTS
   "reasons": ["stub-allow"],                      // ✅ EXISTS
   "signature": "base64-ed25519-sig",              // ✅ EXISTS
   "signature_key_id": "k1",                       // ✅ EXISTS (verify field name)
   "canonical_payload_hash": "sha256-hash",        // ⚠️ VERIFY
-  "issued_at": 1710000000,                        // ⚠️ VERIFY
-  "context_echo": {                               // ⚠️ VERIFY
+  "issued_at": 1710000000,                        // ⚠️ VERIFY (Unix seconds)
+  "ttl_ms": 300000,                               // ⚠️ NEW FIELD
+  "context_echo": {                               // ⚠️ VERIFY + ADD input_hash
     "request_id": "req-uuid-12345",
     "tenant_id": "ent-tenant",
     "agent_id": "ent-agent",
-    "policy_version": "v1",
+    "policy_id": "policy-abc",                    // ⚠️ NEW FIELD
+    "policy_version": "v2",
+    "input_hash": "sha256-hash-of-request",       // ⚠️ NEW FIELD (must echo back)
+    "timestamp_ms": 1710000000000,
     "environment": "production"
   },
   "audit_event_id": "evt-abc123"                  // ✅ EXISTS
@@ -34,9 +61,141 @@ Vigil dashboard and audit system is **100% complete**. The AgentShield backend n
 
 ---
 
-## ⚠️ Fields to Verify
+## ⚠️ Fields to Verify/Add
 
-### 1. `canonical_payload_hash` (CRITICAL)
+### 1. `input_hash` (CRITICAL - NEW)
+
+**What it is:** SHA-256 hash of the canonicalized request input.
+
+**Why it matters:** Prevents tampering with request content. Vigil computes hash before sending to AgentShield, AgentShield echoes it back. Vigil verifies the decision is for the exact request content sent.
+
+**How to compute:**
+```python
+import hashlib
+import json
+
+# Canonical request data (sorted keys)
+request_data = {
+    "agent_id": "agent-1",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "policy_id": "policy-abc",
+    "request_id": "req-123",
+    "tenant_id": "tenant-1",
+    "timestamp_ms": 1710000000000
+}
+
+canonical = json.dumps(request_data, sort_keys=True, separators=(',', ':'))
+input_hash = hashlib.sha256(canonical.encode()).hexdigest()
+```
+
+**Must echo back in response:**
+```json
+{
+  "context_echo": {
+    "input_hash": "sha256-of-request"  // ← Echo this back
+  }
+}
+```
+
+---
+
+### 2. `ttl_ms` (CRITICAL - NEW)
+
+**What it is:** Time-to-live in milliseconds. Decision expires after `issued_at + ttl_ms`.
+
+**Why it matters:** Prevents replay attacks. Vigil rejects decisions older than TTL.
+
+**How to implement:**
+```python
+import time
+
+issued_at = int(time.time())  # Unix seconds
+ttl_ms = 300000  # 5 minutes
+
+# Add to response
+response = {
+    "issued_at": issued_at,
+    "ttl_ms": ttl_ms,
+    ...
+}
+
+# Vigil will verify:
+# current_time <= issued_at + (ttl_ms / 1000)
+```
+
+**Add to response:**
+```json
+{
+  "issued_at": 1710000000,     // Unix seconds
+  "ttl_ms": 300000             // 5 minutes
+}
+```
+
+---
+
+### 3. `schema_version` (CRITICAL - NEW)
+
+**What it is:** Version identifier for decision envelope format.
+
+**Why it matters:** Allows breaking changes. Vigil rejects unknown versions.
+
+**How to implement:**
+```python
+SCHEMA_VERSION = "as_decision_v1"
+
+response = {
+    "schema_version": SCHEMA_VERSION,
+    ...
+}
+```
+
+**Add to response:**
+```json
+{
+  "schema_version": "as_decision_v1"
+}
+```
+
+---
+
+### 4. `policy_id` (IMPORTANT - NEW)
+
+**What it is:** Unique identifier for the policy configuration.
+
+**Why it matters:** Distinguishes between different policies (not just versions). Enables policy-level auditing.
+
+**How to implement:**
+```python
+# In request
+request_data = {
+    "policy_id": "policy-abc",      # Policy identifier
+    "policy_version": "v2",         # Version of that policy
+    ...
+}
+
+# Echo in response
+response = {
+    "context_echo": {
+        "policy_id": "policy-abc",
+        "policy_version": "v2",
+        ...
+    }
+}
+```
+
+**Add to response:**
+```json
+{
+  "context_echo": {
+    "policy_id": "policy-abc",
+    "policy_version": "v2"
+  }
+}
+```
+
+---
+
+### 5. `canonical_payload_hash` (VERIFY)
 
 **What it is:** SHA-256 hash of the canonical payload that was signed.
 
@@ -69,7 +228,7 @@ hash_value = hashlib.sha256(canonical.encode()).hexdigest()
 
 ---
 
-### 2. `issued_at` (CRITICAL)
+### 6. `issued_at` (VERIFY - ALREADY DISCUSSED)
 
 **What it is:** Unix timestamp when decision was issued.
 
@@ -91,13 +250,13 @@ issued_at = int(time.time())  # Unix timestamp (seconds since epoch)
 
 ---
 
-### 3. `context_echo` (CRITICAL)
+### 7. `context_echo` (VERIFY - UPDATE WITH NEW FIELDS)
 
 **What it is:** Echo of the request context that Vigil sent.
 
 **Why it matters:** Vigil validates that the decision is for THIS EXACT request, not a replayed or cross-tenant decision.
 
-**How to implement:**
+**Updated to include new fields:**
 ```python
 # In AgentShield /v1/enforce handler:
 
@@ -106,7 +265,10 @@ context_echo = {
     "request_id": request_data["request_id"],
     "tenant_id": request_data["tenant_id"],
     "agent_id": request_data["agent_id"],
+    "policy_id": request_data["policy_id"],          # ← NEW
     "policy_version": request_data["policy_version"],
+    "input_hash": request_data["input_hash"],        # ← NEW (critical)
+    "timestamp_ms": request_data["timestamp_ms"],
     "environment": request_data.get("environment", "unknown")
 }
 
@@ -125,7 +287,10 @@ response = {
     "request_id": "req-uuid-12345",
     "tenant_id": "ent-tenant",
     "agent_id": "ent-agent",
-    "policy_version": "v1",
+    "policy_id": "policy-abc",         // ← NEW
+    "policy_version": "v2",
+    "input_hash": "sha256-hash",       // ← NEW (must match request)
+    "timestamp_ms": 1710000000000,
     "environment": "production"
   }
 }
@@ -262,49 +427,77 @@ docker-compose logs vigil | grep "sig_verified"
 
 ## 📋 Checklist
 
-**AgentShield Response:**
+**AgentShield Response (Updated):**
 
+- [ ] `schema_version` field (e.g., "as_decision_v1") **← NEW**
 - [ ] `action` field (ALLOW, BLOCK, SANITIZE)
 - [ ] `risk_score` field (0.0 - 1.0)
 - [ ] `reasons` array
 - [ ] `signature` field (base64 Ed25519)
 - [ ] `signature_key_id` field (e.g., "k1")
 - [ ] `canonical_payload_hash` field (SHA-256 hex)
-- [ ] `issued_at` field (Unix timestamp)
+- [ ] `issued_at` field (Unix timestamp seconds)
+- [ ] `ttl_ms` field (milliseconds) **← NEW**
 - [ ] `context_echo` object with:
   - [ ] `request_id`
   - [ ] `tenant_id`
   - [ ] `agent_id`
+  - [ ] `policy_id` **← NEW**
   - [ ] `policy_version`
+  - [ ] `input_hash` **← NEW (critical)**
+  - [ ] `timestamp_ms`
   - [ ] `environment`
 - [ ] `audit_event_id` field
+
+**Vigil Request (What Vigil Sends):**
+
+- [ ] `request_id`
+- [ ] `tenant_id`
+- [ ] `agent_id`
+- [ ] `policy_id` **← NEW**
+- [ ] `policy_version`
+- [ ] `input_hash` **← NEW (critical)**
+- [ ] `timestamp_ms` **← NEW**
+- [ ] `ttl_ms` **← NEW**
+- [ ] `environment`
+- [ ] `messages`
 
 **Verification:**
 
 - [ ] Signature is valid Ed25519
 - [ ] Hash matches canonical payload
 - [ ] Timestamp is recent (< 5 minutes)
-- [ ] Context echo matches request
+- [ ] `issued_at + ttl_ms` not expired **← NEW**
+- [ ] Context echo matches request (all fields including input_hash) **← UPDATED**
 - [ ] JWKS endpoint returns valid keys
+- [ ] Schema version is recognized **← NEW**
+- [ ] Clock skew tolerance: ±2 minutes **← NEW**
 
 ---
 
 ## 🎯 Summary
 
-**Vigil side: ✅ 100% complete**
-- Dashboard UI ready
-- Admin APIs ready
-- Signature verification ready
-- Audit logging ready
+**Vigil side: ⚠️ 80% complete - Needs Priority 1 updates**
+- Dashboard UI ready ✅
+- Admin APIs ready ✅
+- Signature verification ready ✅
+- Audit logging ready ✅
+- **Need to add:** input_hash computation, ttl_ms validation, error taxonomy
 
-**AgentShield side: ⚠️ Verify these 3 fields**
-1. `canonical_payload_hash` - SHA-256 of signed payload
-2. `issued_at` - Unix timestamp
-3. `context_echo` - Request context object
+**AgentShield side: ⚠️ Verify 7 fields (4 new)**
+1. `input_hash` - **NEW** - Hash of canonicalized request (critical)
+2. `ttl_ms` - **NEW** - Time-to-live in milliseconds
+3. `schema_version` - **NEW** - Version identifier ("as_decision_v1")
+4. `policy_id` - **NEW** - Policy identifier (not just version)
+5. `canonical_payload_hash` - VERIFY - SHA-256 of signed payload
+6. `issued_at` - VERIFY - Unix timestamp
+7. `context_echo` - UPDATE - Must include input_hash and policy_id
 
-**If those 3 fields exist → System is production-ready!**
+**If those 7 fields exist → System is production-ready!**
 
-**If missing → Quick fix in AgentShield response builder (see code above)**
+**If missing → Implementation guide provided above**
+
+**Priority:** Implement `input_hash` first - it's the most critical security addition.
 
 ---
 
