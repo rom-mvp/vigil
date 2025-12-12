@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # AgentShield decision service (external dependency)
+  agentshield:
+    image: agentshield:latest
+    container_name: agentshield
+    ports:
+      - "9000:9000"
+    environment:
+      - SIGNING_KEY_PATH=/keys/signing.key
+      - PORT=9000
+    volumes:
+      - ./keys:/keys:ro
+    networks:
+      - vigil-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Vigil security gateway
+  vigil:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vigil-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      # AgentShield Integration
+      - AGENTSHIELD_URL=http://agentshield:9000
+      - AGENTSHIELD_JWKS_URL=http://agentshield:9000/v1/keys/jwks
+      - AGENTSHIELD_REQUIRE_SIGNED=true
+      - AGENTSHIELD_TIMEOUT_MS=3000
+      
+      # Policy Configuration
+      - MAX_RISK_SCORE=0.30
+      - DISALLOWED_REASONS=credential-exfil,tenant-boundary,privilege-escalation
+      
+      # Freshness Validation
+      - DECISION_MAX_AGE_SECONDS=300
+      
+      # Rate Limiting
+      - RATE_LIMIT_RPS=5
+      
+      # Optional: Local Fallback
+      - AGENTSHIELD_REQUIRED=false
+      
+      # Logging
+      - LOG_LEVEL=INFO
+    depends_on:
+      agentshield:
+        condition: service_healthy
+    networks:
+      - vigil-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  vigil-network:
+    driver: bridge

@@ -160,6 +160,350 @@ Comprehensive immutable audit trail:
 
 ---
 
+# 🚢 Deployment Options
+
+## Option 1: Docker (Recommended for Dev)
+
+### Build Image
+
+```bash
+docker build -t vigil:latest -f Dockerfile .
+```
+
+### Run Container
+
+```bash
+docker run -d \
+  -p 8000:8000 \
+  -e AGENTSHIELD_URL=http://agentshield:9000 \
+  -e AGENTSHIELD_JWKS_URL=http://agentshield:9000/v1/keys/jwks \
+  -e AGENTSHIELD_REQUIRE_SIGNED=true \
+  -e MAX_RISK_SCORE=0.30 \
+  -e DECISION_MAX_AGE_SECONDS=300 \
+  --name vigil \
+  vigil:latest
+```
+
+### Docker Compose (Full Stack)
+
+```yaml
+version: '3.8'
+services:
+  agentshield:
+    image: agentshield:latest
+    ports:
+      - "9000:9000"
+    environment:
+      - SIGNING_KEY_PATH=/keys/signing.key
+    volumes:
+      - ./keys:/keys
+
+  vigil:
+    image: vigil:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - AGENTSHIELD_URL=http://agentshield:9000
+      - AGENTSHIELD_JWKS_URL=http://agentshield:9000/v1/keys/jwks
+      - AGENTSHIELD_REQUIRE_SIGNED=true
+      - MAX_RISK_SCORE=0.30
+    depends_on:
+      - agentshield
+```
+
+Run: `docker-compose up -d`
+
+---
+
+## Option 2: Kubernetes (Recommended for Production)
+
+### Deploy Vigil Gateway
+
+```bash
+kubectl create namespace vigil-system
+
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: vigil-gateway
+  template:
+    metadata:
+      labels:
+        app: vigil-gateway
+    spec:
+      containers:
+      - name: vigil
+        image: vigil:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: AGENTSHIELD_URL
+          value: "http://agentshield:9000"
+        - name: AGENTSHIELD_JWKS_URL
+          value: "http://agentshield:9000/v1/keys/jwks"
+        - name: AGENTSHIELD_REQUIRE_SIGNED
+          value: "true"
+        - name: MAX_RISK_SCORE
+          value: "0.30"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+spec:
+  selector:
+    app: vigil-gateway
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
+EOF
+```
+
+### Network Policy (Egress Hardening)
+
+Prevent apps from bypassing Vigil by blocking direct LLM access:
+
+```bash
+# Apply network policy to block direct external LLM access
+kubectl apply -f k8s-networkpolicy.yaml
+
+# Apply CoreDNS rewrite to force LLM domains to Vigil
+kubectl apply -f k8s-coredns-rewrite.yaml
+kubectl rollout restart deployment/coredns -n kube-system
+```
+
+This forces all OpenAI, Anthropic, etc. requests to route through Vigil.
+
+### Verify Deployment
+
+```bash
+kubectl get pods -n vigil-system
+kubectl logs -n vigil-system -l app=vigil-gateway --tail=50
+```
+
+---
+
+## Option 3: Cloud Platforms
+
+### AWS ECS/Fargate
+
+```bash
+# Create ECR repository
+aws ecr create-repository --repository-name vigil
+
+# Build and push image
+docker build -t vigil:latest .
+docker tag vigil:latest <account-id>.dkr.ecr.<region>.amazonaws.com/vigil:latest
+aws ecr get-login-password | docker login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com
+docker push <account-id>.dkr.ecr.<region>.amazonaws.com/vigil:latest
+
+# Create ECS task definition (task-definition.json)
+# Create ECS service with ALB and target group
+```
+
+**ECS Task Definition:**
+```json
+{
+  "family": "vigil-gateway",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "containerDefinitions": [{
+    "name": "vigil",
+    "image": "<account-id>.dkr.ecr.<region>.amazonaws.com/vigil:latest",
+    "portMappings": [{"containerPort": 8000}],
+    "environment": [
+      {"name": "AGENTSHIELD_URL", "value": "http://agentshield:9000"},
+      {"name": "AGENTSHIELD_REQUIRE_SIGNED", "value": "true"}
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/vigil-gateway",
+        "awslogs-region": "<region>",
+        "awslogs-stream-prefix": "ecs"
+      }
+    }
+  }]
+}
+```
+
+### Google Cloud Run
+
+```bash
+# Build and push to GCR
+gcloud builds submit --tag gcr.io/<project-id>/vigil:latest
+
+# Deploy to Cloud Run
+gcloud run deploy vigil-gateway \
+  --image gcr.io/<project-id>/vigil:latest \
+  --platform managed \
+  --region us-central1 \
+  --port 8000 \
+  --set-env-vars "AGENTSHIELD_URL=http://agentshield:9000,AGENTSHIELD_REQUIRE_SIGNED=true" \
+  --allow-unauthenticated
+```
+
+### Azure Container Instances
+
+```bash
+# Build and push to ACR
+az acr build --registry <registry-name> --image vigil:latest .
+
+# Deploy to ACI
+az container create \
+  --resource-group vigil-rg \
+  --name vigil-gateway \
+  --image <registry-name>.azurecr.io/vigil:latest \
+  --cpu 1 --memory 1 \
+  --ports 8000 \
+  --environment-variables \
+    AGENTSHIELD_URL=http://agentshield:9000 \
+    AGENTSHIELD_REQUIRE_SIGNED=true
+```
+
+---
+
+## Option 4: Kubernetes with Helm (Simplified)
+
+```bash
+# Create Helm chart (chart/vigil)
+helm create vigil
+
+# Install
+helm install vigil ./chart/vigil \
+  --namespace vigil-system \
+  --create-namespace \
+  --set image.repository=vigil \
+  --set image.tag=latest \
+  --set env.AGENTSHIELD_URL=http://agentshield:9000 \
+  --set env.AGENTSHIELD_REQUIRE_SIGNED=true \
+  --set replicaCount=3
+
+# Upgrade
+helm upgrade vigil ./chart/vigil
+
+# Uninstall
+helm uninstall vigil -n vigil-system
+```
+
+---
+
+## Monitoring & Observability
+
+### Prometheus Metrics
+
+Vigil exposes metrics at `/metrics`:
+
+```yaml
+# ServiceMonitor for Prometheus Operator
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+spec:
+  selector:
+    matchLabels:
+      app: vigil-gateway
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+```
+
+### Datadog Integration
+
+```bash
+# Add Datadog agent sidecar
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-datadog-config
+  namespace: vigil-system
+data:
+  conf.yaml: |
+    init_config:
+    instances:
+      - prometheus_url: http://localhost:8000/metrics
+EOF
+```
+
+### CloudWatch Logs (AWS)
+
+```bash
+# Stream logs to CloudWatch
+aws logs create-log-group --log-group-name /aws/vigil/gateway
+
+# Add CloudWatch agent to ECS task definition
+```
+
+### Alerts Configuration
+
+Deploy Vigil alerts:
+
+```bash
+kubectl apply -f vigil-alerts.yaml
+```
+
+Monitors:
+- Signature verification failures
+- Tampering detection
+- High block rate
+- Latency SLA violations
+- AgentShield unavailability
+
+---
+
+## Production Checklist
+
+Before deploying to production:
+
+- [ ] **TLS/mTLS** - Configure HTTPS with valid certificates
+- [ ] **Secrets Management** - Use vault/AWS Secrets Manager for keys
+- [ ] **Rate Limiting** - Set per-tenant rate limits
+- [ ] **Horizontal Scaling** - Deploy 3+ replicas with HPA
+- [ ] **Health Checks** - Configure liveness/readiness probes
+- [ ] **Monitoring** - Set up Prometheus/Datadog/CloudWatch
+- [ ] **Alerting** - Configure PagerDuty/OpsGenie for critical alerts
+- [ ] **Audit Logs** - Stream to SIEM (Splunk/Elastic/Sumo Logic)
+- [ ] **Network Policy** - Apply egress hardening rules
+- [ ] **Disaster Recovery** - Document backup/restore procedures
+- [ ] **Load Testing** - Verify performance under expected load
+- [ ] **Security Scan** - Run Trivy/Snyk on container images
+
+---
+
 # 🧪 Testing
 
 ## Integration Tests
