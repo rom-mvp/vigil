@@ -10,11 +10,13 @@ sys.path.append(os.getcwd())
 from firewall_engine import FirewallEngine
 from pii_engine import PIIEngine
 from merkle_log_store import MerkleLogStore
+from agentshield_client import AgentShieldClient
 
 app = Flask(__name__)
 firewall = FirewallEngine()
 pii_engine = PIIEngine()
 append_store = MerkleLogStore(os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl'))
+agentshield = AgentShieldClient()
 
 LOG_SERVER_URL = os.environ.get('LOG_SERVER_URL', 'http://vigil-dashboard:3000/ingest')
 
@@ -96,39 +98,100 @@ def transparent_proxy():
     global _seq_id
     _seq_id += 1
     
-    for msg in messages:
-        if msg.get('role') == 'user':
-            content = msg.get('content', '')
-            
-            # Security Scan
-            check = firewall.scan_input(content)
-            if not check['safe']:
-                ship_log_async({
-                    "request_id": f"req_{datetime.datetime.now().timestamp()}",
-                    "timestamp": datetime.datetime.utcnow().isoformat(),
-                    "seq_id": _seq_id,
-                    "status": "BLOCKED_INPUT",
-                    "agent_id": agent_id,
-                    "tenant_id": "local-docker",
-                    "details": {"reason": check['reason'], "redacted": False}
-                })
-                return jsonify({"error": {"message": f"Vigil Blocked: {check['reason']}", "code": 403}}), 403
-            
-            # PII Redaction
-            clean_text, was_redacted = pii_engine.scan_and_redact(content)
-            if was_redacted:
-                msg['content'] = clean_text
+    # Centralized pre-LLM enforcement via AgentShield
+    FALLBACK = os.environ.get('AGENTSHIELD_REQUIRED', 'true').lower() != 'true'
+    enforcement_req = {
+        "request_id": f"req_{datetime.datetime.now().timestamp()}",
+        "tenant_id": request.headers.get('X-Tenant-ID', 'local-docker'),
+        "agent_id": agent_id,
+        "policy_version": int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0)),
+        "messages": messages,
+        "metadata": body.get('metadata', {})
+    }
+    try:
+        decision = agentshield.enforce(enforcement_req)
+    except Exception as e:
+        if not FALLBACK:
+            return jsonify({"error": {"message": "AgentShield unavailable", "code": 503}}), 503
+        # Fallback path: run local firewall + PII
+        fallback_used = True
+        for msg in messages:
+            if msg.get('role') == 'user':
+                content = msg.get('content', '')
+                check = firewall.scan_input(content)
+                if not check['safe']:
+                    ship_log_async({
+                        "request_id": enforcement_req["request_id"],
+                        "timestamp": datetime.datetime.utcnow().isoformat(),
+                        "seq_id": _seq_id,
+                        "status": "BLOCK",
+                        "agent_id": agent_id,
+                        "tenant_id": enforcement_req['tenant_id'],
+                        "details": {"reason": check['reason'], "redacted": False, "FALLBACK_USED": True}
+                    })
+                    return jsonify({"error": {"message": f"Blocked (fallback): {check['reason']}", "code": 403}}), 403
+                clean_text, was_redacted = pii_engine.scan_and_redact(content)
+                if was_redacted:
+                    msg['content'] = clean_text
+        decision = {
+            "action": "ALLOW",
+            "risk_score": 0.0,
+            "reasons": ["fallback"],
+            "signature_hash": None,
+            "audit_event_id": None,
+            "sanitized": messages
+        }
 
-            # Log Success
-            ship_log_async({
-                "request_id": f"req_{datetime.datetime.now().timestamp()}",
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-                "seq_id": _seq_id,
-                "status": "PROCESSED",
-                "agent_id": agent_id,
-                "tenant_id": "local-docker",
-                "details": {"reason": "Allowed", "redacted": was_redacted}
-            })
+    # Enforce AgentShield decision
+    action = decision.get('action')
+    risk_score = decision.get('risk_score')
+    signature_hash = decision.get('signature_hash')
+    audit_event_id = decision.get('audit_event_id')
+    reasons = decision.get('reasons', [])
+
+    # Structured log + local append-only cache
+    ship_log_async({
+        "request_id": enforcement_req["request_id"],
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "seq_id": _seq_id,
+        "status": action,
+        "agent_id": agent_id,
+        "tenant_id": enforcement_req['tenant_id'],
+        "risk_score": risk_score,
+        "signature_hash": signature_hash,
+        "audit_event_id": audit_event_id,
+        "reasons": reasons
+    })
+
+    if action == 'BLOCK':
+        return jsonify({"error": {"message": ", ".join(reasons) or "Blocked", "code": 403, "signature_hash": signature_hash, "audit_event_id": audit_event_id}}), 403
+    if action in ('SANITIZE', 'REWRITE'):
+        sanitized = decision.get('sanitized') or messages
+        # Provide a simple response indicating sanitation and the new content
+        return jsonify({
+            "id": "chatcmpl-vigil-sanitized",
+            "action": action,
+            "risk_score": risk_score,
+            "signature_hash": signature_hash,
+            "audit_event_id": audit_event_id,
+            "reasons": reasons,
+            "sanitized_preview": {"before": messages, "after": sanitized},
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": sanitized[-1]['content'] if sanitized else ''}}]
+        })
+
+    # ALLOW: proceed (mock)
+    return jsonify({
+        "id": "chatcmpl-vigil-allow",
+        "action": "ALLOW",
+        "risk_score": risk_score,
+        "signature_hash": signature_hash,
+        "audit_event_id": audit_event_id,
+        "reasons": reasons,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": f"Accepted: {messages[-1]['content']}" if messages else ''}
+        }]
+    })
 
     return jsonify({
         "id": "chatcmpl-vigil-mock",

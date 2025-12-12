@@ -22,7 +22,20 @@ services:
       - MAX_REQUEST_BYTES=1048576
       - RATE_LIMIT_RPS=5
       - REQUIRE_MTLS=false
+      - AGENTSHIELD_URL=http://agentshield:9000
+      - AGENTSHIELD_TIMEOUT_MS=3000
+      - AGENTSHIELD_MODE=http
+      - AGENTSHIELD_REQUIRED=true
     networks:
       - vigil-net
 networks:
   vigil-net:
+  agentshield:
+    image: ghcr.io/rom-mvp/agentshield-dev-stub:latest
+    container_name: agentshield
+    ports:
+      - "9000:9000"
+    environment:
+      - LOG_LEVEL=info
+    # In dev we can stub /v1/enforce to return ALLOW
+    # Replace with real agentshield backend when available
