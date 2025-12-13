@@ -35,12 +35,29 @@
 
 # 🚀 Quick Start
 
-## Prerequisites
+## Option 1: Docker (Easiest) 🐳
+
+Run everything with one command:
+
+```bash
+docker-compose -f docker-compose.prod.yml up --build
+```
+
+Then access:
+- **Vigil Gateway**: http://localhost:8000
+- **Dashboard**: http://localhost:3000
+- **AgentShield (Mock)**: http://localhost:9000
+
+See [DOCKER_SETUP.md](DOCKER_SETUP.md) for full Docker guide.
+
+## Option 2: Local Installation
+
+### Prerequisites
 
 * Python 3.11+
-* AgentShield backend running on `http://localhost:9000`
+* AgentShield backend running on `http://localhost:9000` (or use mock_agentshield.py)
 
-## Installation
+### Installation
 
 ```bash
 git clone https://github.com/rom-mvp/vigil
@@ -52,7 +69,7 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Configuration
+### Configuration
 
 Create `.env` or set environment variables:
 
@@ -77,7 +94,7 @@ export RATE_LIMIT_RPS=5
 export AGENTSHIELD_REQUIRED=false
 ```
 
-## Run the Gateway
+### Run the Gateway
 
 ```bash
 cd legacy

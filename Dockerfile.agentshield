@@ -1,0 +1,35 @@
+# Mock AgentShield Service Dockerfile
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 agentshield && \
+    mkdir -p /app && \
+    chown -R agentshield:agentshield /app
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir flask flask-cors
+
+# Copy mock service
+COPY mock_agentshield.py .
+
+# Switch to non-root user
+USER agentshield
+
+# Expose port
+EXPOSE 9000
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9000/health || exit 1
+
+# Run the mock service
+CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=9000"]
