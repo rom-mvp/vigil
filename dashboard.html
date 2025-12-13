@@ -16,7 +16,17 @@
             --ios-blue: #007AFF;
             --ios-green: #34C759;
             --ios-red: #FF3B30;
-            --ios-orange: #FF9500;
+        
+            <div id="token-banner" class="token-banner" style="display: none;">
+                <div><strong>Admin token required</strong> — Paste the one-time token you received and continue.</div>
+                <div class="token-input-row">
+                    <input id="token-input" type="text" placeholder="local-dev-token" autocomplete="off">
+                    <button class="btn-primary" style="padding: 10px 16px; border: none; border-radius: 8px; color: white; cursor: pointer; background: var(--ios-blue);" onclick="saveToken()">Continue</button>
+                </div>
+                <div class="token-actions">
+                    <button class="link-btn" onclick="clearToken()">Clear token</button>
+                </div>
+            </div>
             --ios-gray: #8E8E93;
             --ios-gray-light: #C7C7CC;
             --ios-gray-bg: #F2F2F7;
@@ -94,6 +104,48 @@
             margin: 24px auto;
             padding: 0 24px;
         }
+
+            /* Token prompt */
+            .token-banner {
+                background: #fff8e1;
+                border: 1px solid #ffe082;
+                color: #8d6e63;
+                border-radius: 10px;
+                padding: 16px;
+                margin: 16px 24px 0 24px;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            }
+
+            .token-banner strong { color: #5d4037; }
+
+            .token-input-row {
+                display: flex;
+                gap: 12px;
+                margin-top: 12px;
+            }
+
+            .token-input-row input {
+                flex: 1;
+                padding: 12px;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                font-size: 14px;
+            }
+
+            .token-actions {
+                margin-top: 8px;
+                font-size: 12px;
+                color: var(--ios-gray);
+            }
+
+            .link-btn {
+                background: none;
+                border: none;
+                color: var(--ios-blue);
+                cursor: pointer;
+                padding: 0;
+                font-size: 12px;
+            }
 
         /* Cards (iOS style) */
         .card {
@@ -752,6 +804,75 @@
         // Global state
         let allLogs = [];
         let filteredLogs = [];
+        let refreshHandle = null;
+
+        const TOKEN_KEY = 'vigil_admin_token';
+
+        const getToken = () => localStorage.getItem(TOKEN_KEY);
+        const setToken = (token) => localStorage.setItem(TOKEN_KEY, token);
+        const clearTokenStorage = () => localStorage.removeItem(TOKEN_KEY);
+
+        function showTokenBanner() {
+            document.getElementById('token-banner').style.display = 'block';
+        }
+
+        function hideTokenBanner() {
+            document.getElementById('token-banner').style.display = 'none';
+        }
+
+        function saveToken() {
+            const token = (document.getElementById('token-input').value || '').trim();
+            if (!token) return;
+            setToken(token);
+            hideTokenBanner();
+            startAutoRefresh();
+            refreshLogs();
+        }
+
+        function clearToken() {
+            clearTokenStorage();
+            showTokenBanner();
+            if (refreshHandle) clearInterval(refreshHandle);
+        }
+
+        function requireToken() {
+            const token = getToken();
+            if (!token) {
+                showTokenBanner();
+                throw new Error('Token required');
+            }
+            return token;
+        }
+
+        async function fetchWithAuth(url, options = {}) {
+            const token = requireToken();
+            const headers = options.headers ? { ...options.headers } : {};
+            headers['Authorization'] = `Bearer ${token}`;
+            headers['X-Admin-Token'] = token;
+            return fetch(url, { ...options, headers });
+        }
+
+        function startAutoRefresh() {
+            if (refreshHandle) clearInterval(refreshHandle);
+            refreshHandle = setInterval(refreshLogs, 30000);
+        }
+
+        // Token form enter key support
+        document.addEventListener('DOMContentLoaded', () => {
+            const token = getToken();
+            if (token) {
+                hideTokenBanner();
+                refreshLogs();
+                startAutoRefresh();
+            } else {
+                showTokenBanner();
+            }
+
+            const tokenInput = document.getElementById('token-input');
+            tokenInput?.addEventListener('keyup', (e) => {
+                if (e.key === 'Enter') saveToken();
+            });
+        });
 
         // Tab switching
         document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -773,13 +894,14 @@
         // Fetch audit logs
         async function refreshLogs() {
             try {
-                const response = await fetch('/api/v1/audit/logs?limit=100');
+                const response = await fetchWithAuth('/api/v1/audit/logs?limit=100');
                 const data = await response.json();
                 allLogs = data.logs || [];
                 filteredLogs = allLogs;
                 renderLogs();
                 updateStats();
             } catch (error) {
+                if (error.message === 'Token required') return;
                 console.error('Failed to fetch logs:', error);
                 document.getElementById('logs-table-body').innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--ios-red);">Failed to load logs</td></tr>';
             }
@@ -1034,9 +1156,7 @@
             }, 1500);
         }
 
-        // Initialize
-        refreshLogs();
-        setInterval(refreshLogs, 30000); // Auto-refresh every 30 seconds
+        // Initialization handled in DOMContentLoaded to ensure token prompt appears first
     </script>
 </body>
 </html>
