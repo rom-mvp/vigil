@@ -265,7 +265,7 @@ def serve_landing():
 @app.route('/dashboard')
 @app.route('/dashboard/<path:path>')
 def serve_dashboard(path=''):
-    """Serve dashboard (requires auth)"""
+    """Serve dashboard (client-side will check auth)"""
     return send_from_directory('.', 'dashboard_auth.html')
 
 

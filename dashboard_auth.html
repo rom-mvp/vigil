@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vigil Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --ios-blue: #007AFF;
+            --ios-green: #34C759;
+            --ios-red: #FF3B30;
+            --ios-orange: #FF9500;
+            --ios-gray: #8E8E93;
+            --ios-gray-light: #C7C7CC;
+            --ios-gray-bg: #F2F2F7;
+            --ios-white: #FFFFFF;
+            --ios-black: #000000;
+            --ios-separator: rgba(60, 60, 67, 0.29);
+            --ios-shadow: rgba(0, 0, 0, 0.1);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--ios-gray-bg);
+            color: var(--ios-black);
+            line-height: 1.5;
+        }
+
+        /* Navigation */
+        nav {
+            background: var(--ios-white);
+            border-bottom: 1px solid var(--ios-separator);
+            padding: 16px 24px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px var(--ios-shadow);
+        }
+
+        nav .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        nav h1 {
+            font-size: 22px;
+            font-weight: 600;
+            color: var(--ios-black);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        nav .right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        nav .user-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: var(--ios-gray);
+        }
+
+        nav button {
+            background: var(--ios-red);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            color: white;
+            transition: all 0.2s ease;
+        }
+
+        nav button:hover {
+            opacity: 0.9;
+        }
+
+        /* Container */
+        .container {
+            max-width: 1200px;
+            margin: 24px auto;
+            padding: 0 24px;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--ios-white);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px var(--ios-shadow);
+            border: 1px solid var(--ios-separator);
+        }
+
+        .card h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--ios-black);
+        }
+
+        .card p {
+            color: var(--ios-gray);
+            margin-bottom: 12px;
+        }
+
+        /* Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--ios-white);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 2px 8px var(--ios-shadow);
+            border: 1px solid var(--ios-separator);
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--ios-blue);
+            margin: 10px 0;
+        }
+
+        .stat-card .label {
+            font-size: 14px;
+            color: var(--ios-gray);
+            font-weight: 500;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+        }
+
+        .btn-primary {
+            background: var(--ios-blue);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+
+        .btn-secondary {
+            background: var(--ios-gray-bg);
+            color: var(--ios-black);
+        }
+
+        .btn-secondary:hover {
+            background: var(--ios-gray-light);
+        }
+
+        .btn-success {
+            background: var(--ios-green);
+            color: white;
+        }
+
+        /* API Key Display */
+        .api-key-box {
+            background: var(--ios-gray-bg);
+            padding: 16px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            word-break: break-all;
+            margin: 10px 0;
+        }
+
+        .copy-btn {
+            background: var(--ios-blue);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .copy-btn:hover {
+            opacity: 0.9;
+        }
+
+        .copy-btn.copied {
+            background: var(--ios-green);
+        }
+
+        /* Loading state */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--ios-gray);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--ios-gray-light);
+            border-top-color: var(--ios-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Error state */
+        .error {
+            background: #FFE5E5;
+            border: 1px solid #FF6B6B;
+            color: #C92A2A;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .success {
+            background: #E6F5E5;
+            border: 1px solid #51CF66;
+            color: #2B8A3E;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        /* Plan badge */
+        .plan-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .plan-badge.free {
+            background: var(--ios-gray-bg);
+            color: var(--ios-gray);
+        }
+
+        .plan-badge.starter {
+            background: #E3F2FD;
+            color: var(--ios-blue);
+        }
+
+        .plan-badge.professional {
+            background: #F3E5F5;
+            color: #9C27B0;
+        }
+
+        .plan-badge.enterprise {
+            background: #FCE4EC;
+            color: #C2185B;
+        }
+
+        /* Usage bar */
+        .usage-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--ios-gray-light);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .usage-fill {
+            height: 100%;
+            background: var(--ios-blue);
+            transition: width 0.3s ease;
+        }
+
+        .usage-text {
+            font-size: 12px;
+            color: var(--ios-gray);
+            margin-top: 5px;
+        }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        thead {
+            border-bottom: 1px solid var(--ios-separator);
+        }
+
+        th {
+            text-align: left;
+            padding: 12px;
+            font-weight: 600;
+            color: var(--ios-gray);
+            font-size: 13px;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid var(--ios-separator);
+            font-size: 14px;
+        }
+
+        tr:hover {
+            background: var(--ios-gray-bg);
+        }
+
+        @media (max-width: 768px) {
+            nav .container {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .container {
+                padding: 0 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav>
+        <div class="container">
+            <h1>🛡️ Vigil Dashboard</h1>
+            <div class="right">
+                <div class="user-info">
+                    <span id="userEmail">Loading...</span>
+                    <span id="planBadge"></span>
+                </div>
+                <button onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container">
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Loading your dashboard...</p>
+        </div>
+
+        <div id="content" style="display: none;">
+            <!-- Account Section -->
+            <div class="card">
+                <h2>Account Information</h2>
+                <div class="grid">
+                    <div class="stat-card">
+                        <div class="label">Email</div>
+                        <div style="font-size: 16px; font-weight: 600; color: var(--ios-black);" id="accountEmail">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Current Plan</div>
+                        <div style="font-size: 16px; font-weight: 600; color: var(--ios-blue);" id="currentPlan">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="label">Tenant ID</div>
+                        <div style="font-size: 12px; font-weight: 600; color: var(--ios-gray); word-break: break-all;" id="tenantId">—</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Usage Section -->
+            <div class="card">
+                <h2>Usage & Limits</h2>
+                <div id="usageStats">
+                    <p style="color: var(--ios-gray);">Loading usage data...</p>
+                </div>
+            </div>
+
+            <!-- API Keys Section -->
+            <div class="card">
+                <h2>API Keys</h2>
+                <p style="color: var(--ios-gray);">Use your API key to authenticate requests to the Vigil gateway.</p>
+                <div id="apiKeysList">
+                    <p style="color: var(--ios-gray);">Loading API keys...</p>
+                </div>
+                <button class="btn btn-primary" onclick="generateNewKey()" style="margin-top: 16px;">Generate New Key</button>
+            </div>
+
+            <!-- Billing Section -->
+            <div class="card">
+                <h2>Billing & Subscription</h2>
+                <div id="billingInfo">
+                    <p style="color: var(--ios-gray);">Loading subscription info...</p>
+                </div>
+                <div style="margin-top: 20px;">
+                    <a href="/pricing" class="btn btn-primary">View Pricing</a>
+                    <button class="btn btn-secondary" onclick="loadBillingInfo()" style="margin-left: 10px;">Refresh</button>
+                </div>
+            </div>
+
+            <!-- Integration Guide -->
+            <div class="card">
+                <h2>Integration Guide</h2>
+                <p>Add Vigil to your application:</p>
+                <pre style="background: var(--ios-gray-bg); padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 12px; margin-top: 10px;"><code>curl -X POST https://vigil.your-domain.com/api/check \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{
+    "agent_id": "my-agent",
+    "request": "user message here"
+  }'</code></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Check authentication on page load
+        window.addEventListener('load', async () => {
+            const token = localStorage.getItem('vigil_token');
+            
+            if (!token) {
+                window.location.href = '/';
+                return;
+            }
+
+            try {
+                await loadDashboard();
+            } catch (err) {
+                showError('Failed to load dashboard: ' + err.message);
+            }
+        });
+
+        async function loadDashboard() {
+            try {
+                const token = localStorage.getItem('vigil_token');
+                
+                // Load user info
+                const userResponse = await fetch('/api/auth/me', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!userResponse.ok) {
+                    if (userResponse.status === 401) {
+                        localStorage.removeItem('vigil_token');
+                        window.location.href = '/';
+                    }
+                    throw new Error('Failed to load user info');
+                }
+
+                const user = await userResponse.json();
+                
+                // Display user info
+                document.getElementById('userEmail').textContent = user.email;
+                document.getElementById('accountEmail').textContent = user.email;
+                document.getElementById('tenantId').textContent = user.tenant.tenant_id;
+                
+                // Display plan
+                const planName = user.tenant.plan || 'free';
+                document.getElementById('currentPlan').textContent = planName.charAt(0).toUpperCase() + planName.slice(1);
+                document.getElementById('planBadge').innerHTML = `<span class="plan-badge ${planName}">${planName.toUpperCase()}</span>`;
+
+                // Load usage stats
+                await loadUsageStats(user.tenant);
+                
+                // Load API keys
+                await loadApiKeys();
+                
+                // Load billing info
+                await loadBillingInfo();
+
+                // Show content
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('content').style.display = 'block';
+
+            } catch (err) {
+                showError(err.message);
+            }
+        }
+
+        async function loadUsageStats(tenant) {
+            try {
+                const token = localStorage.getItem('vigil_token');
+                const response = await fetch('/api/tenants/usage', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!response.ok) throw new Error('Failed to load usage');
+
+                const data = await response.json();
+                const summary = data.summary;
+
+                const requestsPercent = (summary.total_requests / summary.request_limit * 100).toFixed(1);
+                const agentsPercent = (summary.max_agents / summary.agent_limit * 100).toFixed(1);
+
+                let html = `
+                    <div class="grid">
+                        <div class="stat-card">
+                            <div class="label">Requests Used</div>
+                            <div class="value">${summary.total_requests.toLocaleString()}</div>
+                            <div style="font-size: 12px; color: var(--ios-gray);">of ${summary.request_limit.toLocaleString()}/month</div>
+                            <div class="usage-bar">
+                                <div class="usage-fill" style="width: ${Math.min(requestsPercent, 100)}%"></div>
+                            </div>
+                            <div class="usage-text">${requestsPercent}% used</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="label">Agents Active</div>
+                            <div class="value">${summary.max_agents}</div>
+                            <div style="font-size: 12px; color: var(--ios-gray);">of ${summary.agent_limit} limit</div>
+                            <div class="usage-bar">
+                                <div class="usage-fill" style="width: ${Math.min(agentsPercent, 100)}%"></div>
+                            </div>
+                            <div class="usage-text">${agentsPercent}% used</div>
+                        </div>
+                    </div>
+                `;
+
+                document.getElementById('usageStats').innerHTML = html;
+            } catch (err) {
+                document.getElementById('usageStats').innerHTML = `<p style="color: var(--ios-red);">${err.message}</p>`;
+            }
+        }
+
+        async function loadApiKeys() {
+            try {
+                const token = localStorage.getItem('vigil_token');
+                const response = await fetch('/api/tenants/keys', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!response.ok) throw new Error('Failed to load API keys');
+
+                const data = await response.json();
+                const keys = data.api_keys || [];
+
+                if (keys.length === 0) {
+                    document.getElementById('apiKeysList').innerHTML = '<p style="color: var(--ios-gray);">No API keys yet. Create one to get started.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr><th>Key Name</th><th>Key</th><th>Created</th></tr></thead><tbody>';
+                
+                for (const key of keys) {
+                    const createdDate = new Date(key.created_at).toLocaleDateString();
+                    const maskedKey = key.api_key.substring(0, 10) + '...' + key.api_key.substring(key.api_key.length - 4);
+                    
+                    html += `
+                        <tr>
+                            <td>${key.name || 'Default'}</td>
+                            <td>
+                                <code style="background: var(--ios-gray-bg); padding: 2px 6px; border-radius: 4px; cursor: pointer;" onclick="copyToClipboard('${key.api_key}', this)">
+                                    ${maskedKey}
+                                </code>
+                            </td>
+                            <td>${createdDate}</td>
+                        </tr>
+                    `;
+                }
+                
+                html += '</tbody></table>';
+                document.getElementById('apiKeysList').innerHTML = html;
+            } catch (err) {
+                document.getElementById('apiKeysList').innerHTML = `<p style="color: var(--ios-red);">${err.message}</p>`;
+            }
+        }
+
+        async function loadBillingInfo() {
+            try {
+                const token = localStorage.getItem('vigil_token');
+                const response = await fetch('/api/billing/subscription', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!response.ok) throw new Error('Failed to load subscription info');
+
+                const data = await response.json();
+
+                let html = '<div class="grid">';
+
+                if (data.subscription) {
+                    const sub = data.subscription;
+                    html += `
+                        <div class="stat-card">
+                            <div class="label">Plan</div>
+                            <div style="font-size: 16px; font-weight: 600; color: var(--ios-blue);">${sub.plan.charAt(0).toUpperCase() + sub.plan.slice(1)}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="label">Status</div>
+                            <div style="font-size: 16px; font-weight: 600; color: ${sub.status === 'active' ? 'var(--ios-green)' : 'var(--ios-red)'};">${sub.status}</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="label">Renewal Date</div>
+                            <div style="font-size: 16px; font-weight: 600; color: var(--ios-black);">${new Date(sub.current_period_end).toLocaleDateString()}</div>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div class="stat-card">
+                            <div class="label">Plan</div>
+                            <div style="font-size: 16px; font-weight: 600; color: var(--ios-gray);">Free</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="label">Status</div>
+                            <div style="font-size: 16px; font-weight: 600; color: var(--ios-green);">Active</div>
+                        </div>
+                    `;
+                }
+
+                html += '</div>';
+                document.getElementById('billingInfo').innerHTML = html;
+            } catch (err) {
+                document.getElementById('billingInfo').innerHTML = `<p style="color: var(--ios-red);">${err.message}</p>`;
+            }
+        }
+
+        function copyToClipboard(text, element) {
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = element.textContent;
+                element.textContent = '✓ Copied!';
+                setTimeout(() => {
+                    element.textContent = originalText;
+                }, 2000);
+            });
+        }
+
+        async function generateNewKey() {
+            try {
+                const token = localStorage.getItem('vigil_token');
+                const response = await fetch('/api/tenants/keys', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name: 'API Key ' + new Date().toLocaleDateString() })
+                });
+
+                if (!response.ok) throw new Error('Failed to generate key');
+
+                await loadApiKeys();
+            } catch (err) {
+                showError(err.message);
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('vigil_token');
+            localStorage.removeItem('vigil_user');
+            window.location.href = '/';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById('loading').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
