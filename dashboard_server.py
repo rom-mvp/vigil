@@ -12,6 +12,9 @@ app = Flask(__name__, static_folder='.')
 app.secret_key = os.environ.get('DASHBOARD_SECRET_KEY', secrets.token_hex(32))
 ADMIN_TOKEN = os.environ.get('DASHBOARD_ADMIN_TOKEN')
 
+# Public paths that don't require authentication
+PUBLIC_PATHS = {"/", "/health", "/login.html", "/favicon.ico"}
+
 # Simple in-memory user store (replace with database in production)
 USERS = {
     "admin": {
@@ -31,32 +34,19 @@ ROLE_PERMISSIONS = {
     "viewer": ["read_logs"]
 }
 
-# Public paths that don't require authentication
-PUBLIC_PATHS = {"/", "/health", "/favicon.ico", "/login.html"}
-
-
-def has_admin_token():
-    """Check if request carries the configured admin token."""
-    if not ADMIN_TOKEN:
-        return False
-    auth_header = request.headers.get('Authorization', '') or ''
-    bearer = auth_header[7:] if auth_header.lower().startswith('bearer ') else None
-    x_token = request.headers.get('X-Admin-Token')
-    return bearer == ADMIN_TOKEN or x_token == ADMIN_TOKEN
-
-
 def enforce_auth():
     """Enforce authentication for API endpoints."""
-    # Allow admin token
-    if has_admin_token():
-        session['user'] = 'admin-token'
-        session['role'] = 'admin'
+    hdr = request.headers.get("Authorization", "")
+    bearer = hdr.replace("Bearer ", "") if hdr.startswith("Bearer ") else None
+    x_token = request.headers.get("X-Admin-Token")
+
+    # Accept admin token OR existing session login
+    if ADMIN_TOKEN and (bearer == ADMIN_TOKEN or x_token == ADMIN_TOKEN):
         return None
-    
-    # Allow session-based login
-    if 'user' in session:
+
+    if session.get("user"):
         return None
-    
+
     return jsonify({"error": "Authentication required"}), 401
 
 
@@ -81,17 +71,22 @@ def require_permission(permission):
 
 
 @app.before_request
-def check_auth():
-    """Enforce auth on API endpoints only; allow public access to HTML and health."""
-    # Allow public paths
-    if request.path in PUBLIC_PATHS or request.path.startswith("/static/"):
+def auth_gate():
+    """Allow public HTML/health; protect APIs with token/session."""
+    p = request.path
+
+    # Allow dashboard shell + health + static assets
+    if p in PUBLIC_PATHS or p.startswith("/static/"):
         return None
-    
-    # Enforce auth on all other paths (API endpoints)
-    return enforce_auth()
+
+    # Protect API endpoints only
+    if p.startswith("/api/"):
+        return enforce_auth()
+
+    return None
 
 
-@app.route('/')
+@app.get('/')
 def index():
     """Serve the dashboard HTML."""
     return send_from_directory('.', 'dashboard.html')
@@ -318,10 +313,10 @@ def login_page():
     '''
 
 
-@app.route('/health', methods=['GET'])
+@app.get('/health')
 def health():
     """Health check endpoint (no auth required)."""
-    return jsonify({"status": "ok", "service": "vigil-dashboard"})
+    return jsonify({"status": "healthy", "service": "vigil-dashboard"})
 
 
 if __name__ == '__main__':
