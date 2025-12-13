@@ -31,37 +31,8 @@ ROLE_PERMISSIONS = {
     "viewer": ["read_logs"]
 }
 
-def require_auth(f):
-    """Decorator to require authentication."""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if has_admin_token():
-            return f(*args, **kwargs)
-        if 'user' not in session:
-            return jsonify({"error": "Authentication required"}), 401
-        return f(*args, **kwargs)
-    return decorated_function
-
-def require_permission(permission):
-    """Decorator to require specific permission."""
-    def decorator(f):
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            if has_admin_token():
-                return f(*args, **kwargs)
-            if 'user' not in session:
-                return jsonify({"error": "Authentication required"}), 401
-            
-            user = session['user']
-            role = USERS.get(user, {}).get('role', 'viewer')
-            permissions = ROLE_PERMISSIONS.get(role, [])
-            
-            if permission not in permissions:
-                return jsonify({"error": "Insufficient permissions"}), 403
-            
-            return f(*args, **kwargs)
-        return decorated_function
-    return decorator
+# Public paths that don't require authentication
+PUBLIC_PATHS = {"/", "/health", "/favicon.ico", "/login.html"}
 
 
 def has_admin_token():
@@ -74,22 +45,53 @@ def has_admin_token():
     return bearer == ADMIN_TOKEN or x_token == ADMIN_TOKEN
 
 
-@app.before_request
-def admin_token_bypass():
-    """Allow access when a valid admin token is provided."""
-    if request.path == '/health':
-        return None
-
+def enforce_auth():
+    """Enforce authentication for API endpoints."""
+    # Allow admin token
     if has_admin_token():
-        # Mark session for downstream role checks
         session['user'] = 'admin-token'
         session['role'] = 'admin'
         return None
+    
+    # Allow session-based login
+    if 'user' in session:
+        return None
+    
+    return jsonify({"error": "Authentication required"}), 401
 
-    return None
+
+def require_permission(permission):
+    """Decorator to require specific permission (after enforce_auth)."""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            user = session.get('user')
+            if not user:
+                return jsonify({"error": "Authentication required"}), 401
+            
+            role = 'admin' if user == 'admin-token' else USERS.get(user, {}).get('role', 'viewer')
+            permissions = ROLE_PERMISSIONS.get(role, [])
+            
+            if permission not in permissions:
+                return jsonify({"error": "Insufficient permissions"}), 403
+            
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+
+@app.before_request
+def check_auth():
+    """Enforce auth on API endpoints only; allow public access to HTML and health."""
+    # Allow public paths
+    if request.path in PUBLIC_PATHS or request.path.startswith("/static/"):
+        return None
+    
+    # Enforce auth on all other paths (API endpoints)
+    return enforce_auth()
+
 
 @app.route('/')
-@require_auth
 def index():
     """Serve the dashboard HTML."""
     return send_from_directory('.', 'dashboard.html')
@@ -130,17 +132,19 @@ def logout():
     return jsonify({"success": True})
 
 @app.route('/api/auth/me', methods=['GET'])
-@require_auth
 def get_current_user():
     """Get current authenticated user."""
-    if has_admin_token():
+    username = session.get('user')
+    if not username:
+        return jsonify({"error": "Not authenticated"}), 401
+    
+    if username == 'admin-token':
         return jsonify({
             "username": "admin-token",
             "role": "admin",
             "permissions": ROLE_PERMISSIONS.get('admin', [])
         })
 
-    username = session.get('user')
     user = USERS.get(username, {})
     return jsonify({
         "username": username,
@@ -314,13 +318,15 @@ def login_page():
     '''
 
 
-@app.route('/health')
+@app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint."""
+    """Health check endpoint (no auth required)."""
     return jsonify({"status": "ok", "service": "vigil-dashboard"})
+
 
 if __name__ == '__main__':
     print("🔭 Vigil Dashboard running on http://0.0.0.0:3000")
+    print(f"\nAdmin Token: {ADMIN_TOKEN or '(not set)'}")
     print("\nDemo Accounts:")
     print("  Admin:   admin / admin123")
     print("  Auditor: auditor / auditor123")
