@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vigil - AI Security Gateway</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        
+        .hero {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 100px 20px;
+            text-align: center;
+        }
+        
+        .hero h1 {
+            font-size: 3.5em;
+            margin-bottom: 20px;
+            font-weight: 700;
+        }
+        
+        .hero p {
+            font-size: 1.5em;
+            margin-bottom: 40px;
+            opacity: 0.9;
+        }
+        
+        .cta-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 15px 40px;
+            font-size: 1.1em;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: white;
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: white;
+            border: 2px solid white;
+        }
+        
+        .btn-secondary:hover {
+            background: white;
+            color: #667eea;
+        }
+        
+        .features {
+            padding: 80px 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .features h2 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 60px;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 40px;
+        }
+        
+        .feature {
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+        }
+        
+        .feature:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 12px rgba(0,0,0,0.15);
+        }
+        
+        .feature h3 {
+            font-size: 1.5em;
+            margin-bottom: 15px;
+            color: #667eea;
+        }
+        
+        .stats {
+            background: #f8f9fa;
+            padding: 60px 20px;
+            text-align: center;
+        }
+        
+        .stat-grid {
+            display: flex;
+            justify-content: center;
+            gap: 60px;
+            flex-wrap: wrap;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .stat {
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 3em;
+            font-weight: 700;
+            color: #667eea;
+        }
+        
+        .stat-label {
+            font-size: 1.2em;
+            color: #666;
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        .modal h2 {
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+        }
+        
+        .error {
+            color: #e74c3c;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        
+        .success {
+            color: #27ae60;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Hero Section -->
+    <div class="hero">
+        <h1>🛡️ Vigil Security Gateway</h1>
+        <p>Enterprise-grade security for your AI applications</p>
+        <div class="cta-buttons">
+            <button class="btn btn-primary" onclick="showRegisterModal()">Get Started Free</button>
+            <button class="btn btn-secondary" onclick="showLoginModal()">Sign In</button>
+            <a href="/pricing" class="btn btn-secondary">View Pricing</a>
+        </div>
+    </div>
+    
+    <!-- Features Section -->
+    <div class="features">
+        <h2>Why Choose Vigil?</h2>
+        <div class="feature-grid">
+            <div class="feature">
+                <h3>🔒 Real-time Security</h3>
+                <p>Protect your AI agents with real-time request inspection, signature verification, and policy enforcement.</p>
+            </div>
+            <div class="feature">
+                <h3>📊 Complete Audit Trail</h3>
+                <p>Tamper-evident Merkle chain logging ensures every decision is tracked and verifiable for compliance.</p>
+            </div>
+            <div class="feature">
+                <h3>⚡ Ultra-fast Performance</h3>
+                <p>Sub-10ms decision latency with intelligent caching and optimized signature verification.</p>
+            </div>
+            <div class="feature">
+                <h3>🎯 Policy Control</h3>
+                <p>Define custom security policies, risk thresholds, and content filtering rules for your use case.</p>
+            </div>
+            <div class="feature">
+                <h3>📈 Analytics Dashboard</h3>
+                <p>Beautiful real-time dashboard with metrics, latency percentiles, and usage statistics.</p>
+            </div>
+            <div class="feature">
+                <h3>🚀 Easy Integration</h3>
+                <p>Drop-in replacement for OpenAI API with AgentShield integration. Deploy in minutes.</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Stats Section -->
+    <div class="stats">
+        <h2>Trusted by Security-First Teams</h2>
+        <div class="stat-grid">
+            <div class="stat">
+                <div class="stat-number">99.9%</div>
+                <div class="stat-label">Uptime SLA</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number">&lt;5ms</div>
+                <div class="stat-label">Avg Latency</div>
+            </div>
+            <div class="stat">
+                <div class="stat-number">100%</div>
+                <div class="stat-label">Audit Coverage</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Login Modal -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <h2>Sign In to Vigil</h2>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" name="password" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Sign In</button>
+                <div id="loginError" class="error"></div>
+            </form>
+            <p style="text-align: center; margin-top: 20px;">
+                Don't have an account? <a href="#" onclick="showRegisterModal(); return false;">Sign up</a>
+            </p>
+            <button onclick="closeModals()" style="margin-top: 20px; background: none; border: none; cursor: pointer; width: 100%;">Cancel</button>
+        </div>
+    </div>
+    
+    <!-- Register Modal -->
+    <div id="registerModal" class="modal">
+        <div class="modal-content">
+            <h2>Create Your Account</h2>
+            <form id="registerForm">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label>Full Name</label>
+                    <input type="text" name="full_name">
+                </div>
+                <div class="form-group">
+                    <label>Company (optional)</label>
+                    <input type="text" name="company">
+                </div>
+                <div class="form-group">
+                    <label>Password (min 8 characters)</label>
+                    <input type="password" name="password" required minlength="8">
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Create Account</button>
+                <div id="registerError" class="error"></div>
+                <div id="registerSuccess" class="success"></div>
+            </form>
+            <p style="text-align: center; margin-top: 20px;">
+                Already have an account? <a href="#" onclick="showLoginModal(); return false;">Sign in</a>
+            </p>
+            <button onclick="closeModals()" style="margin-top: 20px; background: none; border: none; cursor: pointer; width: 100%;">Cancel</button>
+        </div>
+    </div>
+    
+    <script>
+        function showLoginModal() {
+            closeModals();
+            document.getElementById('loginModal').classList.add('active');
+        }
+        
+        function showRegisterModal() {
+            closeModals();
+            document.getElementById('registerModal').classList.add('active');
+        }
+        
+        function closeModals() {
+            document.querySelectorAll('.modal').forEach(m => m.classList.remove('active'));
+        }
+        
+        // Login form handler
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData);
+            
+            document.getElementById('loginError').textContent = '';
+            
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    localStorage.setItem('vigil_token', result.token);
+                    localStorage.setItem('vigil_user', JSON.stringify({
+                        email: result.email,
+                        tenant_id: result.tenant_id
+                    }));
+                    window.location.href = '/dashboard';
+                } else {
+                    document.getElementById('loginError').textContent = result.error || 'Login failed';
+                }
+            } catch (err) {
+                document.getElementById('loginError').textContent = 'Network error. Please try again.';
+            }
+        });
+        
+        // Register form handler
+        document.getElementById('registerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData);
+            
+            document.getElementById('registerError').textContent = '';
+            document.getElementById('registerSuccess').textContent = '';
+            
+            try {
+                const response = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    localStorage.setItem('vigil_token', result.token);
+                    localStorage.setItem('vigil_user', JSON.stringify({
+                        email: result.email,
+                        tenant_id: result.tenant_id,
+                        api_key: result.api_key
+                    }));
+                    document.getElementById('registerSuccess').textContent = 'Account created! Redirecting...';
+                    setTimeout(() => window.location.href = '/dashboard', 1500);
+                } else {
+                    document.getElementById('registerError').textContent = result.error || 'Registration failed';
+                }
+            } catch (err) {
+                document.getElementById('registerError').textContent = 'Network error. Please try again.';
+            }
+        });
+    </script>
+</body>
+</html>

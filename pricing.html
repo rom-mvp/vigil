@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pricing - Vigil Security Gateway</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f8f9fa;
+            padding: 40px 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+        
+        .header h1 {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+        
+        .header p {
+            font-size: 1.2em;
+            color: #666;
+        }
+        
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .pricing-card {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+            position: relative;
+        }
+        
+        .pricing-card.featured {
+            transform: scale(1.05);
+            border: 3px solid #667eea;
+        }
+        
+        .pricing-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 24px rgba(0,0,0,0.15);
+        }
+        
+        .badge {
+            position: absolute;
+            top: -15px;
+            right: 20px;
+            background: #667eea;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        
+        .plan-name {
+            font-size: 1.8em;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .plan-price {
+            font-size: 3em;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        
+        .plan-price small {
+            font-size: 0.4em;
+            color: #666;
+        }
+        
+        .plan-description {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        
+        .features {
+            list-style: none;
+            margin-bottom: 30px;
+        }
+        
+        .features li {
+            padding: 10px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .features li:before {
+            content: "✓ ";
+            color: #27ae60;
+            font-weight: 700;
+            margin-right: 10px;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.1em;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+        
+        .btn-secondary {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+        
+        .btn-secondary:hover {
+            background: #667eea;
+            color: white;
+        }
+        
+        .back-link {
+            text-align: center;
+            margin-top: 40px;
+        }
+        
+        .back-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-size: 1.1em;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🛡️ Vigil Pricing</h1>
+        <p>Choose the plan that fits your needs. Upgrade or downgrade anytime.</p>
+    </div>
+    
+    <div class="pricing-grid">
+        <!-- Free Plan -->
+        <div class="pricing-card">
+            <div class="plan-name">Free</div>
+            <div class="plan-price">$0<small>/month</small></div>
+            <div class="plan-description">Perfect for trying out Vigil</div>
+            
+            <ul class="features">
+                <li>1 AI Agent</li>
+                <li>10k requests/month</li>
+                <li>Basic audit logs</li>
+                <li>Community support</li>
+                <li>7-day log retention</li>
+            </ul>
+            
+            <button class="btn btn-secondary" onclick="window.location.href='/'">Get Started</button>
+        </div>
+        
+        <!-- Starter Plan -->
+        <div class="pricing-card">
+            <div class="plan-name">Starter</div>
+            <div class="plan-price">$99<small>/month</small></div>
+            <div class="plan-description">For small teams and projects</div>
+            
+            <ul class="features">
+                <li>5 AI Agents</li>
+                <li>100k requests/month</li>
+                <li>Full audit logs</li>
+                <li>Email support</li>
+                <li>30-day log retention</li>
+                <li>Custom policies</li>
+                <li>Dashboard analytics</li>
+            </ul>
+            
+            <button class="btn btn-primary" onclick="selectPlan('starter')">Subscribe</button>
+        </div>
+        
+        <!-- Professional Plan (Featured) -->
+        <div class="pricing-card featured">
+            <div class="badge">MOST POPULAR</div>
+            <div class="plan-name">Professional</div>
+            <div class="plan-price">$299<small>/month</small></div>
+            <div class="plan-description">For growing businesses</div>
+            
+            <ul class="features">
+                <li>50 AI Agents</li>
+                <li>1M requests/month</li>
+                <li>Advanced analytics</li>
+                <li>Priority support</li>
+                <li>90-day log retention</li>
+                <li>Custom policies</li>
+                <li>Webhook integrations</li>
+                <li>Multi-tenant support</li>
+                <li>SLA guarantee (99.9%)</li>
+            </ul>
+            
+            <button class="btn btn-primary" onclick="selectPlan('professional')">Subscribe</button>
+        </div>
+        
+        <!-- Enterprise Plan -->
+        <div class="pricing-card">
+            <div class="plan-name">Enterprise</div>
+            <div class="plan-price">$999<small>/month</small></div>
+            <div class="plan-description">For large-scale deployments</div>
+            
+            <ul class="features">
+                <li>Unlimited AI Agents</li>
+                <li>Unlimited requests</li>
+                <li>Dedicated support</li>
+                <li>Custom log retention</li>
+                <li>On-premise deployment</li>
+                <li>Custom integrations</li>
+                <li>SLA guarantee (99.99%)</li>
+                <li>Security review</li>
+                <li>Training & onboarding</li>
+            </ul>
+            
+            <button class="btn btn-primary" onclick="selectPlan('enterprise')">Subscribe</button>
+        </div>
+    </div>
+    
+    <div class="back-link">
+        <a href="/">← Back to Home</a>
+    </div>
+    
+    <script>
+        async function selectPlan(plan) {
+            // Check if user is logged in
+            const token = localStorage.getItem('vigil_token');
+            
+            if (!token) {
+                // Redirect to landing page to login/register first
+                alert('Please sign in or create an account first');
+                window.location.href = '/';
+                return;
+            }
+            
+            // Create Stripe checkout session
+            try {
+                const response = await fetch('/api/billing/subscribe', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ plan })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    // Redirect to Stripe checkout
+                    window.location.href = result.checkout_url;
+                } else {
+                    alert(result.error || 'Failed to create checkout session');
+                }
+            } catch (err) {
+                alert('Network error. Please try again.');
+            }
+        }
+    </script>
+</body>
+</html>
