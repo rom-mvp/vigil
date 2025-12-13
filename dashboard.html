@@ -894,9 +894,9 @@
         // Fetch audit logs
         async function refreshLogs() {
             try {
-                const response = await fetchWithAuth('/api/v1/audit/logs?limit=100');
+                const response = await fetchWithAuth('/api/events?limit=100');
                 const data = await response.json();
-                allLogs = data.logs || [];
+                allLogs = data.events || [];
                 filteredLogs = allLogs;
                 renderLogs();
                 updateStats();
