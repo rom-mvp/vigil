@@ -29,6 +29,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: vigil-gateway
+    user: "1000:1000"
+    command: /bin/sh -c "mkdir -p /app/logs && chown -R 1000:1000 /app/logs && python legacy/local_server.py"
     ports:
       - "8000:8000"
     environment:
