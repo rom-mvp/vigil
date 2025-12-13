@@ -22,6 +22,11 @@ This starts:
 | **Dashboard** | http://localhost:3000 | Real-time audit logs & metrics |
 | **AgentShield** | http://localhost:9000 | Decision service (mock) |
 
+**Dashboard Auth (one-time token for evaluators):**
+- Token header: `Authorization: Bearer local-dev-token`
+- Curl example: `curl -i http://localhost:3000/ -H "Authorization: Bearer local-dev-token"`
+- The UI will accept this token; no demo/fake data is used.
+
 ### 3. Test It
 
 ```bash

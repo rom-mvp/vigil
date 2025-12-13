@@ -10,6 +10,7 @@ import hashlib
 
 app = Flask(__name__, static_folder='.')
 app.secret_key = os.environ.get('DASHBOARD_SECRET_KEY', secrets.token_hex(32))
+ADMIN_TOKEN = os.environ.get('DASHBOARD_ADMIN_TOKEN')
 
 # Simple in-memory user store (replace with database in production)
 USERS = {
@@ -34,6 +35,8 @@ def require_auth(f):
     """Decorator to require authentication."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        if has_admin_token():
+            return f(*args, **kwargs)
         if 'user' not in session:
             return jsonify({"error": "Authentication required"}), 401
         return f(*args, **kwargs)
@@ -44,6 +47,8 @@ def require_permission(permission):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
+            if has_admin_token():
+                return f(*args, **kwargs)
             if 'user' not in session:
                 return jsonify({"error": "Authentication required"}), 401
             
@@ -57,6 +62,31 @@ def require_permission(permission):
             return f(*args, **kwargs)
         return decorated_function
     return decorator
+
+
+def has_admin_token():
+    """Check if request carries the configured admin token."""
+    if not ADMIN_TOKEN:
+        return False
+    auth_header = request.headers.get('Authorization', '') or ''
+    bearer = auth_header[7:] if auth_header.lower().startswith('bearer ') else None
+    x_token = request.headers.get('X-Admin-Token')
+    return bearer == ADMIN_TOKEN or x_token == ADMIN_TOKEN
+
+
+@app.before_request
+def admin_token_bypass():
+    """Allow access when a valid admin token is provided."""
+    if request.path == '/health':
+        return None
+
+    if has_admin_token():
+        # Mark session for downstream role checks
+        session['user'] = 'admin-token'
+        session['role'] = 'admin'
+        return None
+
+    return None
 
 @app.route('/')
 @require_auth
@@ -103,6 +133,13 @@ def logout():
 @require_auth
 def get_current_user():
     """Get current authenticated user."""
+    if has_admin_token():
+        return jsonify({
+            "username": "admin-token",
+            "role": "admin",
+            "permissions": ROLE_PERMISSIONS.get('admin', [])
+        })
+
     username = session.get('user')
     user = USERS.get(username, {})
     return jsonify({
@@ -238,6 +275,11 @@ def login_page():
             Admin: admin / admin123<br>
             Auditor: auditor / auditor123
         </div>
+
+        <div class="demo-users">
+            <strong>Token Access:</strong>
+            Send header: Authorization: Bearer {token}
+        </div>
     </div>
 
     <script>
@@ -270,6 +312,12 @@ def login_page():
 </body>
 </html>
     '''
+
+
+@app.route('/health')
+def health():
+    """Health check endpoint."""
+    return jsonify({"status": "ok", "service": "vigil-dashboard"})
 
 if __name__ == '__main__':
     print("🔭 Vigil Dashboard running on http://0.0.0.0:3000")

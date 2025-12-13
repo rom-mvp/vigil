@@ -79,6 +79,7 @@ services:
       - "3000:3000"
     environment:
       - DASHBOARD_SECRET_KEY=change-me-in-production
+      - DASHBOARD_ADMIN_TOKEN=local-dev-token
       - VIGIL_GATEWAY_URL=http://vigil:8000
       - APPEND_LOG_PATH=/app/logs/vigil_audit.jsonl
     volumes:
@@ -88,7 +89,7 @@ services:
     depends_on:
       - vigil
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 10s
       timeout: 5s
       retries: 3
