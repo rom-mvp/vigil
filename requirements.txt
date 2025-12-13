@@ -10,7 +10,3 @@ presidio-anonymizer
 spacy
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
 
-# Authentication & Billing
-PyJWT==2.8.0
-stripe==7.4.0
-flask-cors==4.0.0
