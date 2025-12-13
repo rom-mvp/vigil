@@ -7,10 +7,13 @@ from functools import wraps
 import os
 import secrets
 import hashlib
+import json
+import time
 
 app = Flask(__name__, static_folder='.')
 app.secret_key = os.environ.get('DASHBOARD_SECRET_KEY', secrets.token_hex(32))
 ADMIN_TOKEN = os.environ.get('DASHBOARD_ADMIN_TOKEN')
+APPEND_LOG_PATH = os.getenv("APPEND_LOG_PATH", "/app/logs/vigil_audit.jsonl")
 
 # Public paths that don't require authentication
 PUBLIC_PATHS = {"/", "/health", "/login.html", "/favicon.ico"}
@@ -317,6 +320,48 @@ def login_page():
 def health():
     """Health check endpoint (no auth required)."""
     return jsonify({"status": "healthy", "service": "vigil-dashboard"})
+
+
+@app.get('/api/status')
+def api_status():
+    """Status endpoint for UI sanity checks."""
+    return jsonify({
+        "status": "ok",
+        "gateway_url": os.getenv("VIGIL_GATEWAY_URL"),
+        "append_log_path": APPEND_LOG_PATH,
+        "time": time.time()
+    }), 200
+
+
+@app.get('/api/events')
+def api_events():
+    """Return recent audit events from the append-only log."""
+    limit = int(request.args.get("limit", "200"))
+    events = []
+
+    try:
+        with open(APPEND_LOG_PATH, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    events.append(obj)
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        return jsonify({
+            "events": [],
+            "count": 0,
+            "source": APPEND_LOG_PATH,
+            "warning": "log file not found"
+        }), 200
+
+    if limit > 0:
+        events = events[-limit:]
+
+    return jsonify({"events": events, "count": len(events)}), 200
 
 
 if __name__ == '__main__':
