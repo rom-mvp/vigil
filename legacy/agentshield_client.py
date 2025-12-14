@@ -484,3 +484,117 @@ class AgentShieldClient:
         error = RuntimeError("AgentShield enforcement failed: unknown error")
         error.vigil_error_code = VigilErrorCode.AGENTSHIELD_UNREACHABLE
         raise error
+
+    def get_decision(self, decision_request: dict) -> dict:
+        """Call AgentShield /decision endpoint to obtain a signed decision envelope.
+
+        Adds required timing fields, computes a simple nonce, and verifies
+        the signature using JWKS or pinned public key.
+        """
+        url = f"{self.base_url}/decision"
+
+        # Required temporal/context fields
+        if "timestamp_ms" not in decision_request:
+            decision_request["timestamp_ms"] = int(time.time() * 1000)
+        if "ttl_ms" not in decision_request:
+            decision_request["ttl_ms"] = 300000  # 5 minutes
+        if "nonce" not in decision_request:
+            decision_request["nonce"] = base64.urlsafe_b64encode(os.urandom(16)).decode("ascii").rstrip("=")
+
+        # Compute input_hash similar to enforce()
+        input_hash = self.compute_input_hash(decision_request)
+        decision_request["input_hash"] = input_hash
+
+        try:
+            resp = requests.post(
+                url,
+                json=decision_request,
+                timeout=self.timeout_ms / 1000.0,
+            )
+            resp.raise_for_status()
+            envelope = resp.json()
+
+            # Verify signature on the returned envelope
+            self._verify_decision_envelope(envelope)
+            envelope["sig_verified"] = True
+            return envelope
+        except Exception as e:
+            err = RuntimeError(f"AgentShield decision failed: {e}")
+            err.vigil_error_code = VigilErrorCode.AGENTSHIELD_UNREACHABLE
+            raise err
+
+    def _verify_decision_envelope(self, envelope: dict) -> None:
+        """Verify Ed25519 signature over canonical decision payload.
+
+        Expects fields: signature, key_id, schema_version, issued_at, ttl_ms,
+        context_echo, decision (ALLOW/BLOCK/etc).
+        """
+        if not _CRYPTO_AVAILABLE:
+            raise RuntimeError("cryptography not installed; cannot verify signature")
+
+        # Basic freshness checks
+        issued_at = envelope.get("issued_at")
+        ttl_ms = envelope.get("ttl_ms")
+        if issued_at and ttl_ms:
+            now_ms = int(time.time() * 1000)
+            if now_ms > int(issued_at) + int(ttl_ms):
+                error = ValueError("Decision TTL expired")
+                error.vigil_error_code = VigilErrorCode.EXPIRED_DECISION
+                raise error
+
+        # Canonicalize payload for signature verification
+        context_echo = envelope.get("context_echo", {})
+        canonical = {
+            "decision": envelope.get("decision"),
+            "risk_score": envelope.get("risk_score"),
+            "reasons": envelope.get("reasons"),
+            "audit_event_id": envelope.get("audit_event_id"),
+            "context_echo": {
+                "tenant_id": context_echo.get("tenant_id"),
+                "agent_id": context_echo.get("agent_id"),
+                "policy_id": context_echo.get("policy_id"),
+                "policy_version": context_echo.get("policy_version"),
+                "request_id": context_echo.get("request_id"),
+                "timestamp_ms": context_echo.get("timestamp_ms"),
+                "ttl_ms": context_echo.get("ttl_ms"),
+                "input_hash": context_echo.get("input_hash"),
+            },
+            "issued_at": envelope.get("issued_at"),
+        }
+
+        canonical_bytes = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+        # Load public key
+        kid = envelope.get("key_id") or envelope.get("signature_key_id")
+        pubkey = None
+        if self.jwks_url:
+            pubkey = self._get_key_from_jwks(kid)
+        if not pubkey:
+            pubkey = self._pubkey
+        if not pubkey:
+            error = RuntimeError(f"Signature verification failed: key '{kid}' not available")
+            error.vigil_error_code = VigilErrorCode.KEY_NOT_FOUND
+            raise error
+
+        # Verify signature
+        sig_b64 = envelope.get("signature")
+        try:
+            signature = base64.urlsafe_b64decode((sig_b64 or "") + "==")
+        except Exception as exc:
+            error = ValueError("Invalid signature encoding")
+            error.vigil_error_code = VigilErrorCode.SIGNATURE_INVALID
+            raise error from exc
+
+        try:
+            if isinstance(pubkey, ed25519.Ed25519PublicKey):
+                pubkey.verify(signature, canonical_bytes)
+            elif isinstance(pubkey, rsa.RSAPublicKey):
+                pubkey.verify(signature, canonical_bytes, padding.PKCS1v15(), hashes.SHA256())
+            else:
+                error = ValueError("Unsupported key type for verification")
+                error.vigil_error_code = VigilErrorCode.SIGNATURE_INVALID
+                raise error
+        except Exception as e:
+            if not hasattr(e, 'vigil_error_code'):
+                e.vigil_error_code = VigilErrorCode.SIGNATURE_INVALID
+            raise

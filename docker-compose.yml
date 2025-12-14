@@ -46,7 +46,8 @@ services:
       - RATE_LIMIT_RPS=5
       
       # Optional: Local Fallback
-      - AGENTSHIELD_REQUIRED=false
+      - AGENTSHIELD_REQUIRED=true
+      - BREAK_GLASS_ENABLED=false
       
       # Logging
       - LOG_LEVEL=INFO

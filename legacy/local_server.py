@@ -393,8 +393,27 @@ def transparent_proxy():
     agentshield_decision = None  # Priority 2: Store original decision before override
     
     try:
-        decision = agentshield.enforce(enforcement_req)
+        # Preferred: obtain signed decision via /decision (deterministic, lightweight)
+        decision_envelope = agentshield.get_decision({
+            "tenant_id": tenant_id,
+            "agent_id": agent_id,
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "request_id": request_id,
+            "messages": messages,
+        })
         timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
+        decision = {
+            "action": decision_envelope.get("decision"),
+            "risk_score": decision_envelope.get("risk_score"),
+            "reasons": decision_envelope.get("reasons"),
+            "signature_hash": decision_envelope.get("decision_hash"),
+            "audit_event_id": decision_envelope.get("audit_event_id"),
+            "sig_verified": True,
+            "key_id": decision_envelope.get("key_id"),
+            "policy_id": policy_id,
+            "input_hash": enforcement_req.get("input_hash"),
+        }
     except Exception as e:
         timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
         enforcement_error = str(e)
