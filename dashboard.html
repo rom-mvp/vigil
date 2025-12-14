@@ -16,17 +16,7 @@
             --ios-blue: #007AFF;
             --ios-green: #34C759;
             --ios-red: #FF3B30;
-        
-            <div id="token-banner" class="token-banner" style="display: none;">
-                <div><strong>Admin token required</strong> — Paste the one-time token you received and continue.</div>
-                <div class="token-input-row">
-                    <input id="token-input" type="text" placeholder="local-dev-token" autocomplete="off">
-                    <button class="btn-primary" style="padding: 10px 16px; border: none; border-radius: 8px; color: white; cursor: pointer; background: var(--ios-blue);" onclick="saveToken()">Continue</button>
-                </div>
-                <div class="token-actions">
-                    <button class="link-btn" onclick="clearToken()">Clear token</button>
-                </div>
-            </div>
+            --ios-orange: #FF9500;
             --ios-gray: #8E8E93;
             --ios-gray-light: #C7C7CC;
             --ios-gray-bg: #F2F2F7;
@@ -564,6 +554,17 @@
             </div>
         </div>
     </nav>
+
+    <div id="token-banner" class="token-banner" style="display: none;">
+        <div><strong>Admin token required</strong> — Paste the one-time token you received and continue.</div>
+        <div class="token-input-row">
+            <input id="token-input" type="text" placeholder="local-dev-token" autocomplete="off">
+            <button class="btn-primary" style="padding: 10px 16px; border: none; border-radius: 8px; color: white; cursor: pointer; background: var(--ios-blue);" onclick="saveToken()">Continue</button>
+        </div>
+        <div class="token-actions">
+            <button class="link-btn" onclick="clearToken()">Clear token</button>
+        </div>
+    </div>
 
     <div class="container">
         <!-- Stats Dashboard -->

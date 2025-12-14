@@ -56,6 +56,7 @@ services:
       # Logging
       - LOG_LEVEL=INFO
       - APPEND_LOG_PATH=/app/logs/vigil_audit.jsonl
+        - DASHBOARD_ADMIN_TOKEN=${DASHBOARD_ADMIN_TOKEN:-local-dev-token}
     volumes:
       - vigil-logs:/app/logs
     networks:
@@ -78,7 +79,8 @@ services:
       dockerfile: Dockerfile.dashboard
     container_name: vigil-dashboard
     ports:
-      - "3000:3000"
+      # Expose dashboard on host port 300 (system expectation)
+      - "300:3000"
     environment:
       - DASHBOARD_SECRET_KEY=change-me-in-production
       - DASHBOARD_ADMIN_TOKEN=local-dev-token
