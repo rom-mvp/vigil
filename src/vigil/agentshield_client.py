@@ -454,6 +454,13 @@ class AgentShieldClient:
         # Compute input_hash (CRITICAL - prevents request tampering)
         input_hash = self.compute_input_hash(enforcement_request)
         enforcement_request["input_hash"] = input_hash
+
+        # Priority 6: Check Cache (High Availability)
+        cached = self._get_cached_decision(input_hash)
+        if cached:
+            # We can return immediately, but we might want to update the timestamp? 
+            # Ideally decision is valid for its original TTL.
+            return cached
         
         url = f"{self.base_url}/v1/enforce"
         cert = None
@@ -496,6 +503,10 @@ class AgentShieldClient:
                 if action:
                     self.metrics.record_decision(action)
                 
+                # Priority 6: Cache success
+                if action == "ALLOW":
+                    self._cache_decision(input_hash, decision)
+
                 return decision
                 
             except requests.exceptions.Timeout as e:
@@ -538,6 +549,31 @@ class AgentShieldClient:
         
         # All retries exhausted or non-retryable error
         if last_exception:
+            # Priority 6: Fail-Open / Bypass Mode
+            if self.fail_open:
+                # Log the bypass event if we have a worker
+                if self.log_sync_worker:
+                    bypass_event = {
+                        "action": "BYPASS",
+                        "reason": "connection_refused_fail_open",
+                        "request_id": enforcement_request.get("request_id"),
+                        "tenant_id": enforcement_request.get("tenant_id"),
+                        "agent_id": enforcement_request.get("agent_id"),
+                        "timestamp": time.time(),
+                        "original_error": str(last_exception)
+                    }
+                    self.log_sync_worker.add_event(bypass_event)
+                
+                # Return a synthesized ALLOW decision
+                return {
+                    "action": "ALLOW",
+                    "risk_score": 0.0,
+                    "reasons": ["fail_open_bypass"],
+                    "sig_verified": False,
+                    "bypass": True,
+                    "input_hash": input_hash
+                }
+
             error = RuntimeError(f"AgentShield enforcement failed: {str(last_exception)}")
             error.vigil_error_code = error_code
             error.__cause__ = last_exception

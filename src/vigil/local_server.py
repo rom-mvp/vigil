@@ -13,12 +13,34 @@ from .firewall_engine import FirewallEngine
 from .pii_engine import PIIEngine
 from .merkle_log_store import MerkleLogStore
 from .agentshield_client import AgentShieldClient, VigilErrorCode
+from .log_sync_worker import LogSyncWorker
 
 app = Flask(__name__)
 firewall = FirewallEngine()
 pii_engine = PIIEngine()
 append_store = MerkleLogStore(os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl'))
 agentshield = AgentShieldClient()
+
+# Initialize Log Sync Worker (Priority 6)
+log_worker = LogSyncWorker(os.environ.get('AGENTSHIELD_URL', 'http://localhost:9000'))
+log_worker.start()
+
+# Register components with AgentShield client for fail-open/caching coordination
+agentshield.register_log_worker(log_worker)
+agentshield.register_firewall_engine(firewall)
+
+# Background task to refresh local policies (Priority 6)
+def _refresh_policies():
+    while True:
+        try:
+            rules = agentshield.fetch_policies()
+            if rules:
+                firewall.update_rules(rules)
+        except Exception:
+            pass
+        time.sleep(60)
+
+threading.Thread(target=_refresh_policies, daemon=True).start()
 
 LOG_SERVER_URL = os.environ.get('LOG_SERVER_URL', 'http://vigil-dashboard:3000/ingest')
 
