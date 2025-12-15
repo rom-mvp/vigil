@@ -4,7 +4,7 @@ import json
 import os
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -118,6 +118,69 @@ class AgentShieldClient:
         
         # Priority 5: Background key refresh thread
         self._start_background_key_refresh()
+
+        # Priority 6: High Availability & Fail-Open
+        self.fail_open = os.getenv("FAIL_OPEN", "false").lower() == "true"
+        self.decision_cache = OrderedDict()
+        self.decision_cache_ttl = 300  # 5 minutes default for cache validity
+        self.decision_cache_limit = 1000
+        self.decision_cache_lock = threading.Lock()
+        self.log_sync_worker = None
+        self.firewall_engine = None
+
+    def register_log_worker(self, worker):
+        self.log_sync_worker = worker
+
+    def register_firewall_engine(self, engine):
+        self.firewall_engine = engine
+
+    def _cache_decision(self, input_hash: str, decision: dict):
+        """Cache an ALLOW decision."""
+        if decision.get("action") != "ALLOW":
+            return
+        
+        with self.decision_cache_lock:
+            # Evict if full (LRU: pop first item)
+            if len(self.decision_cache) >= self.decision_cache_limit:
+                self.decision_cache.popitem(last=False)
+            
+            # Add/Update (move to end)
+            if input_hash in self.decision_cache:
+                self.decision_cache.move_to_end(input_hash)
+            
+            self.decision_cache[input_hash] = {
+                "decision": decision,
+                "cached_at": time.time()
+            }
+
+    def _get_cached_decision(self, input_hash: str) -> Optional[dict]:
+        """Retrieve a valid cached decision."""
+        with self.decision_cache_lock:
+            entry = self.decision_cache.get(input_hash)
+            if not entry:
+                return None
+            
+            # Check TTL
+            age = time.time() - entry["cached_at"]
+            if age > self.decision_cache_ttl:
+                del self.decision_cache[input_hash]
+                return None
+            
+            # Update LRU
+            self.decision_cache.move_to_end(input_hash)
+            return entry["decision"]
+
+    def fetch_policies(self) -> list:
+        """Fetch active policy rules (regexes) from AgentShield."""
+        try:
+            url = f"{self.base_url}/v1/policies/rules"
+            resp = requests.get(url, timeout=self.timeout_ms / 1000.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("rules", [])
+        except Exception:
+            pass
+        return []
 
     def _fetch_jwks(self) -> Dict:
         if not self.jwks_url:

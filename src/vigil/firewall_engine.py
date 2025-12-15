@@ -7,6 +7,16 @@ class FirewallEngine:
             re.compile(r"delete database", re.IGNORECASE),
             re.compile(r"system prompt", re.IGNORECASE)
         ]
+    def update_rules(self, patterns: list[str]):
+        """Update firewall rules dynamically."""
+        new_patterns = []
+        for p in patterns:
+            try:
+                new_patterns.append(re.compile(p, re.IGNORECASE))
+            except re.error:
+                continue
+        self.patterns = new_patterns
+
     def scan_input(self, text):
         if not text: return {"safe": True}
         for p in self.patterns:
