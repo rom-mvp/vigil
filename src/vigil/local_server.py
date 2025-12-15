@@ -7,7 +7,7 @@ import json
 import datetime
 import time
 import uuid
-
+import redis
 
 from .firewall_engine import FirewallEngine
 from .pii_engine import PIIEngine
@@ -33,11 +33,63 @@ MAX_RISK_SCORE = float(os.environ.get('MAX_RISK_SCORE', '0.30'))
 DISALLOWED_REASONS = set(os.environ.get('DISALLOWED_REASONS', 'credential-exfil,tenant-boundary,privilege-escalation').split(','))
 AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '1000')) / 1000.0  # Reduced to 1000ms
 
-# Simple per-API-key token buckets (in-memory)
+# Simple per-API-key token buckets (Redis-backed if available, else in-memory)
 _rate_buckets = {}
 _seq_id = 0
+_redis_client = None
+
+try:
+    if os.environ.get('REDIS_URL'):
+        _redis_client = redis.from_url(os.environ.get('REDIS_URL'))
+except Exception as e:
+    print(f"Warning: Failed to connect to Redis: {e}")
 
 def _rate_check(api_key: str) -> bool:
+    if not api_key:
+        api_key = "anonymous"
+        
+    if _redis_client:
+        # Redis Token Bucket Implementation
+        # Key: rate_limit:{api_key}
+        # Value: tokens available
+        key = f"rate_limit:{api_key}"
+        try:
+            # Script to atomically refill and consume
+            lua_script = """
+            local key = KEYS[1]
+            local capacity = tonumber(ARGV[1])
+            local rate = tonumber(ARGV[2])
+            local now = tonumber(ARGV[3])
+            local cost = tonumber(ARGV[4])
+            
+            local last_updated = tonumber(redis.call('HGET', key, 'last_updated'))
+            local tokens = tonumber(redis.call('HGET', key, 'tokens'))
+            
+            if not last_updated then
+                tokens = capacity
+                last_updated = now
+            end
+            
+            local elapsed = now - last_updated
+            tokens = math.min(capacity, tokens + (elapsed * rate))
+            
+            if tokens >= cost then
+                tokens = tokens - cost
+                redis.call('HSET', key, 'tokens', tokens, 'last_updated', now)
+                redis.call('EXPIRE', key, 600) -- Expire after 10 mins idle
+                return 1
+            else
+                return 0
+            end
+            """
+            cmd = _redis_client.register_script(lua_script)
+            result = cmd(keys=[key], args=[RATE_LIMIT_RPS, RATE_LIMIT_RPS, time.time(), 1.0])
+            return bool(result)
+        except Exception as e:
+            print(f"Redis rate limit error: {e}, falling back to local")
+            # Fall through to local
+            
+    # Local In-Memory Fallback
     import time
     now = time.time()
     bucket = _rate_buckets.get(api_key)
