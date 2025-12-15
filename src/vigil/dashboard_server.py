@@ -1,6 +1,6 @@
 """
 Vigil Dashboard Server
-Serves the audit dashboard UI and handles authentication/RBAC
+Serves the React audit dashboard UI and handles authentication/RBAC
 """
 from flask import Flask, send_from_directory, request, jsonify, session
 from functools import wraps
@@ -10,15 +10,37 @@ import hashlib
 import json
 import time
 
-app = Flask(__name__, static_folder='.')
+# Use our updated MerkleLogStore
+try:
+    from merkle_log_store import MerkleLogStore
+except ImportError:
+    # Fallback if running directly in dev without package context
+    try:
+        from .merkle_log_store import MerkleLogStore
+    except ImportError:
+        # Fallback for direct execution
+        import sys
+        sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+        from merkle_log_store import MerkleLogStore
+
+# Define static folder as the build output
+STATIC_FOLDER = os.path.join(os.getcwd(), 'static_build')
+app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='')
+
 app.secret_key = os.environ.get('DASHBOARD_SECRET_KEY', secrets.token_hex(32))
 ADMIN_TOKEN = os.environ.get('DASHBOARD_ADMIN_TOKEN')
 APPEND_LOG_PATH = os.getenv("APPEND_LOG_PATH", "/app/logs/vigil_audit.jsonl")
 
-# Public paths that don't require authentication
-PUBLIC_PATHS = {"/", "/health", "/login.html", "/favicon.ico"}
+# Initialize store
+log_store = MerkleLogStore(APPEND_LOG_PATH)
 
-# Simple in-memory user store (replace with database in production)
+# Public paths that don't require authentication
+# Note: In a SPA, most paths are handled by the client router, 
+# but we need to allow the initial load of index.html and assets.
+PUBLIC_PATHS = {"/", "/health", "/favicon.ico", "/assets"}
+
+# Simple in-memory user store (replace with Redis/DB in production if desired)
+# For now, we are keeping this simple as requested only for Rate Limiting to go to Redis.
 USERS = {
     "admin": {
         "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
@@ -75,24 +97,35 @@ def require_permission(permission):
 
 @app.before_request
 def auth_gate():
-    """Allow public HTML/health; protect APIs with token/session."""
+    """Allow public assets; protect APIs with token/session."""
     p = request.path
 
-    # Allow dashboard shell + health + static assets
-    if p in PUBLIC_PATHS or p.startswith("/static/"):
+    # Allow health check
+    if p == "/health":
         return None
 
     # Protect API endpoints only
     if p.startswith("/api/"):
+        # Allow login endpoint
+        if p == "/api/auth/login":
+            return None
         return enforce_auth()
 
     return None
 
 
-@app.get('/')
-def index():
-    """Serve the dashboard HTML."""
-    return send_from_directory('.', 'dashboard.html')
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    """Serve React App or Static Assets."""
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    else:
+        # Fallback to index.html for React Router
+        if os.path.exists(os.path.join(app.static_folder, 'index.html')):
+            return send_from_directory(app.static_folder, 'index.html')
+        else:
+            return "Dashboard build not found. Please run the build step.", 404
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -150,172 +183,6 @@ def get_current_user():
         "permissions": ROLE_PERMISSIONS.get(user.get('role'), [])
     })
 
-@app.route('/login.html')
-def login_page():
-    """Serve login page."""
-    return '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vigil Security - Login</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-        }
-
-        .login-container {
-            background: white;
-            border-radius: 16px;
-            padding: 48px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            width: 100%;
-            max-width: 400px;
-        }
-
-        h1 {
-            text-align: center;
-            margin-bottom: 32px;
-            font-size: 28px;
-            color: #333;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: #555;
-        }
-
-        input {
-            width: 100%;
-            padding: 12px 16px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            font-size: 15px;
-        }
-
-        input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        button {
-            width: 100%;
-            padding: 14px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        button:hover {
-            background: #5568d3;
-        }
-
-        .error {
-            color: #ff3b30;
-            font-size: 14px;
-            margin-top: 8px;
-            display: none;
-        }
-
-        .demo-users {
-            margin-top: 24px;
-            padding: 16px;
-            background: #f5f5f5;
-            border-radius: 8px;
-            font-size: 13px;
-            color: #666;
-        }
-
-        .demo-users strong {
-            display: block;
-            margin-bottom: 8px;
-            color: #333;
-        }
-    </style>
-</head>
-<body>
-    <div class="login-container">
-        <h1>🔭 Vigil Security</h1>
-        <form id="login-form">
-            <div class="form-group">
-                <label>Username</label>
-                <input type="text" id="username" required>
-            </div>
-            <div class="form-group">
-                <label>Password</label>
-                <input type="password" id="password" required>
-            </div>
-            <button type="submit">Sign In</button>
-            <div class="error" id="error"></div>
-        </form>
-
-        <div class="demo-users">
-            <strong>Demo Accounts:</strong>
-            Admin: admin / admin123<br>
-            Auditor: auditor / auditor123
-        </div>
-
-        <div class="demo-users">
-            <strong>Token Access:</strong>
-            Send header: Authorization: Bearer {token}
-        </div>
-    </div>
-
-    <script>
-        document.getElementById('login-form').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            const error = document.getElementById('error');
-
-            try {
-                const response = await fetch('/api/auth/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
-                });
-
-                if (response.ok) {
-                    window.location.href = '/';
-                } else {
-                    error.textContent = 'Invalid credentials';
-                    error.style.display = 'block';
-                }
-            } catch (err) {
-                error.textContent = 'Login failed. Please try again.';
-                error.style.display = 'block';
-            }
-        });
-    </script>
-</body>
-</html>
-    '''
-
-
 @app.get('/health')
 def health():
     """Health check endpoint (no auth required)."""
@@ -329,39 +196,64 @@ def api_status():
         "status": "ok",
         "gateway_url": os.getenv("VIGIL_GATEWAY_URL"),
         "append_log_path": APPEND_LOG_PATH,
-        "time": time.time()
+        "time": time.time(),
+        "backend": "postgres" if log_store._use_db else "file"
     }), 200
 
 
 @app.get('/api/events')
 def api_events():
-    """Return recent audit events from the append-only log."""
+    """Return recent audit events using MerkleLogStore."""
     limit = int(request.args.get("limit", "200"))
-    events = []
-
-    try:
-        with open(APPEND_LOG_PATH, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    events.append(obj)
-                except Exception:
-                    continue
-    except FileNotFoundError:
-        return jsonify({
-            "events": [],
-            "count": 0,
-            "source": APPEND_LOG_PATH,
-            "warning": "log file not found"
-        }), 200
-
-    if limit > 0:
-        events = events[-limit:]
-
+    
+    # Use the unified store to get logs (File or DB)
+    events = log_store.get_logs(limit=limit)
+    
+    # Transform for frontend if needed (current structure seems compatible)
+    # The frontend expects { "events": [...] }
+    # Each event in logs is { "ts", "hash", "prev_hash", "entry": {...} }
+    # We might need to flatten it or ensure frontend handles it.
+    # Looking at legacy code:
+    # It read the line, parsed it (obj), and appended. 
+    # obj was: { "entry": {...}, "prev_hash": ..., "hash": ..., "ts": ... }
+    # So the structure returned by get_logs seems to match the file structure.
+    
     return jsonify({"events": events, "count": len(events)}), 200
+
+
+# Ingest endpoint for the Gateway to ship logs to
+@app.route('/api/v1/audit/ingest', methods=['POST'])
+def ingest_log():
+    """Receive logs from Gateway (if not sharing volume/DB)."""
+    # Note: In the new architecture, if both share the DB, this might be redundant,
+    # but useful if they are decoupled or if Gateway just pushes here.
+    # However, Gateway calls 'ship_log_async' which does:
+    # 1. append_store.append(payload) (Local DB/File)
+    # 2. requests.post(LOG_SERVER_URL, ...)
+    # If both use the SAME DB URL, we might get duplicates if we write here too.
+    # But usually Gateway and Dashboard might be separate services.
+    # For now, let's just log it or no-op if using DB.
+    
+    payload = request.json or {}
+    
+    # If we are using a shared DB, the Gateway likely already wrote it.
+    # But Gateway uses its own MerkleLogStore instance.
+    # If they point to the same DB, the Gateway's append() wrote it.
+    # So we don't need to write it again here.
+    # But if Gateway failed to write to DB and fell back to file, it might try to ship here?
+    # The Gateway code does BOTH: append() AND post().
+    
+    # To be safe and avoid duplicates in DB mode:
+    # If we are in DB mode, we assume Gateway is also in DB mode and wrote it.
+    # If we are in File mode, we append it.
+    
+    if not log_store._use_db:
+        # We are file based, so we accept the push
+        # But wait, payload is just the 'entry'. append() wraps it.
+        # Gateway sends the raw payload (entry).
+        log_store.append(payload)
+    
+    return jsonify({"status": "received"}), 200
 
 
 if __name__ == '__main__':

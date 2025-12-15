@@ -1,4 +1,14 @@
-# Vigil Dashboard - Dockerfile
+# Stage 1: Build React Frontend
+FROM node:18-alpine as builder
+
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+
+COPY frontend/ .
+RUN npm run build
+
+# Stage 2: Python Dashboard Server
 FROM python:3.11-slim
 
 # Install system dependencies
@@ -14,12 +24,17 @@ RUN useradd -m -u 1000 vigil && \
 
 WORKDIR /app
 
-# Install Flask
-RUN pip install --no-cache-dir flask
+# Install dependencies (re-using main requirements for simplicity, or just Flask+deps)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy dashboard files
+# Copy backend code
 COPY --chown=vigil:vigil src/vigil/dashboard_server.py .
-COPY --chown=vigil:vigil dashboard.html .
+COPY --chown=vigil:vigil src/vigil/merkle_log_store.py .
+
+# Copy frontend build artifacts from Stage 1
+# We put them in 'static_build' so Flask can serve them
+COPY --from=builder --chown=vigil:vigil /app/dist ./static_build
 
 # Switch to non-root user
 USER vigil
@@ -29,7 +44,7 @@ EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3000/login.html || exit 1
+    CMD curl -f http://localhost:3000/health || exit 1
 
 # Run the dashboard server
 CMD ["python", "dashboard_server.py"]
