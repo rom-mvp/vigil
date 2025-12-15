@@ -6,16 +6,16 @@ services:
     image: agentshield:latest
     container_name: agentshield
     ports:
-      - "9000:9000"
+      - "8000:8000"
     environment:
       - SIGNING_KEY_PATH=/keys/signing.key
-      - PORT=9000
+      - PORT=8000
     volumes:
       - ./keys:/keys:ro
     networks:
       - vigil-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -61,11 +61,11 @@ services:
       dockerfile: Dockerfile
     container_name: vigil-gateway
     ports:
-      - "8000:8000"
+      - "8080:8000"
     environment:
       # AgentShield Integration
-      - AGENTSHIELD_URL=http://agentshield:9000
-      - AGENTSHIELD_JWKS_URL=http://agentshield:9000/v1/keys/jwks
+      - AGENTSHIELD_URL=http://agentshield:8000
+      - AGENTSHIELD_JWKS_URL=http://agentshield:8000/v1/keys/jwks
       - AGENTSHIELD_REQUIRE_SIGNED=true
       - AGENTSHIELD_TIMEOUT_MS=3000
       
@@ -122,6 +122,13 @@ services:
     environment:
       - DASHBOARD_SECRET_KEY=${DASHBOARD_SECRET_KEY:-changeme-in-production}
       - DASHBOARD_ADMIN_TOKEN=${DASHBOARD_ADMIN_TOKEN:-local-dev-token}
+      # VIGIL_GATEWAY_URL used by backend to ping gateway? No, actually Dashboard is mostly frontend.
+      # But if Dashboard Server needs to talk to Gateway, it uses internal Docker network.
+      # Internal port is still 8000. External port mapped to host is 8080.
+      # So VIGIL_GATEWAY_URL=http://vigil:8000 is correct for internal communication.
+      # The frontend running in browser needs external URL.
+      # We should inject VITE_VIGIL_URL into the build.
+      
       - VIGIL_GATEWAY_URL=http://vigil:8000
       - APPEND_LOG_PATH=/app/logs/vigil_audit.jsonl
       - DATABASE_URL=postgresql://vigil:vigil_password@db:5432/vigil_audit
