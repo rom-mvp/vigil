@@ -24,6 +24,9 @@ COPY --chown=vigil:vigil . .
 # Switch to non-root user
 USER vigil
 
+# Set PYTHONPATH to include src
+ENV PYTHONPATH=/app/src
+
 # Expose gateway port
 EXPOSE 8000
 
@@ -31,5 +34,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the gateway
-CMD ["python", "legacy/local_server.py"]
+# Run the gateway module
+CMD ["python", "-m", "vigil.local_server"]

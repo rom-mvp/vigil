@@ -18,7 +18,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir flask
 
 # Copy dashboard files
-COPY --chown=vigil:vigil dashboard_server.py .
+COPY --chown=vigil:vigil src/vigil/dashboard_server.py .
 COPY --chown=vigil:vigil dashboard.html .
 
 # Switch to non-root user
