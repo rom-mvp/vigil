@@ -13,6 +13,12 @@ class FirewallEngine:
             r"\bforget\s+everything\b",
             r"\breset\s+(your|the)\s+(memory|context|instructions)",
             
+            # Financial manipulation attacks
+            r"\b(transfer|authorize|approve|execute)\s+(?:a\s+)?(?:wire|fund|payment|transaction).*\$\d+",
+            r"\b(update|change|modify|increase)\s+(?:my|the)\s+(account|balance|credit|limit).*\$\d+",
+            r"\b(grant|approve|authorize)\s+(?:a\s+)?(?:large|massive|huge|unlimited)\s+(?:transfer|payment|withdrawal)",
+            r"\b(?:wire|send|transfer)\s+(?:me\s+)?\$?\d+,\d+\s+(?:to|into)\b",
+            
             # SQL Injection
             r"[';\"]+\s*(?:OR|AND)\s+['\"]?\d+['\"]?\s*=\s*['\"]?\d+",
             r"\b(DROP|DELETE|TRUNCATE|ALTER|INSERT|UPDATE)\s+(TABLE|DATABASE|FROM|INTO)\b",
@@ -46,10 +52,17 @@ class FirewallEngine:
             r"\bsudo\s+",
             r"\bsu\s+-",
             
-            # PII patterns (additional to PIIEngine)
-            r"\b\d{3}-\d{2}-\d{4}\b",  # SSN
+            # Healthcare/Patient Data (additional PII)
+            r"\b(patient|medical)\s+id\b",
+            r"\b(?:DOB|date\s+of\s+birth)\s*:\s*\d{1,2}/\d{1,2}/\d{4}",
+            r"\b(?:diagnosis|medical\s+record|health\s+data)\b",
+            
+            # Financial Data (additional PII)
+            r"\b(account|routing|swift)\s+(number|code)\b",
             r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b",  # Credit card
             r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b.*\bpassword\b",  # Email+password
+            r"\b\d{3}-\d{2}-\d{4}\b",  # SSN pattern (XXX-XX-XXXX)
+            r"\b(social\s+security|SSN|sin)\b",  # References to SSN
             
             # System commands
             r"\b(system|execute|exec|run)\s+(command|cmd|shell)\b",
@@ -61,12 +74,20 @@ class FirewallEngine:
             r"\bpretend\s+you\s+are\s+(unfiltered|unrestricted|without\s+ethics)\b",
             r"\byou\s+are\s+now\b.*\b(no\s+ethical|unfiltered|unrestricted)\b",
             
+            # JSON-based attacks
+            r'"\s*(?:task|action|command|instruction|rule)\s*"\s*:\s*"(?:ignore|disregard|bypass|forget|override|dump)',
+            r'(?:ignore|disregard|bypass|forget|override|skip)[\s_]?(rules?|instructions?|guidelines?|restrictions?|filters?|policies?)',
+            
             # Data exfiltration
             r"\b(reveal|show|display|expose|leak)\b.*\b(api[_\s]?key|secret|token|password|credential)\b",
             r"\bdump\s+(database|table|credentials)\b",
             r"\bexfiltrate\s+data\b",
             
-            # Base64/Encoding hints (patterns that suggest encoding evasion)
+            # Bomb/Weapon/Illegal content
+            r"\bhow\s+to\s+(build|make|create)\s+(a\s+)?(bomb|explosive|weapon|gun)\b",
+            r"\b(hacking|cracking|illegal)\s+(tools?|techniques?|methods?)\b",
+            
+            # Base64/Encoding hints
             r"\bdecode\s+(this|the\s+following)\b.*[A-Za-z0-9+/=]{20,}",
             r"\btranslate\s+from\s+base64\b",
             r"\\x[0-9a-fA-F]{2}",  # Hex encoding
