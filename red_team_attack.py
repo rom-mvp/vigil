@@ -312,7 +312,12 @@ class VigilRedTeam:
             # Determine decision
             if status_code == 403:
                 decision = "BLOCK"
-                error_msg = response_data.get('error', {}).get('message', 'Blocked')
+                # Handle both string and dict error formats
+                error_field = response_data.get('error', {})
+                if isinstance(error_field, dict):
+                    error_msg = error_field.get('message', 'Blocked')
+                else:
+                    error_msg = str(error_field)
             elif status_code == 429:
                 decision = "RATE_LIMITED"
                 error_msg = "Rate limit exceeded"
@@ -321,7 +326,11 @@ class VigilRedTeam:
                 error_msg = ""
             else:
                 decision = f"HTTP_{status_code}"
-                error_msg = response_data.get('error', {}).get('message', 'Unknown')
+                error_field = response_data.get('error', {})
+                if isinstance(error_field, dict):
+                    error_msg = error_field.get('message', 'Unknown')
+                else:
+                    error_msg = str(error_field)
             
             # Check for signature (cryptographic verification)
             signature_present = 'signature' in response_data or 'x-vigil-signature' in response.headers

@@ -12,9 +12,12 @@ import json
 import time
 import os
 import requests
+import re
 from vigil.advanced_threat_detector import AdvancedThreatDetector
 from vigil.security_framework import SecurityFramework
 from vigil.api_key_auth import APIKeyAuth
+from vigil.pii_engine import PIIEngine
+from vigil.firewall_engine import FirewallEngine
 
 app = Flask(__name__)
 
@@ -25,11 +28,15 @@ AGENTSHIELD_URL = os.environ.get('AGENTSHIELD_URL', 'http://localhost:5000')
 detector = AdvancedThreatDetector()
 framework = SecurityFramework()
 api_auth = APIKeyAuth()
+pii_engine = PIIEngine()
+firewall = FirewallEngine()
 
 print(f"🛡️  Vigil Enhanced Server Starting...")
 print(f"   AgentShield URL: {AGENTSHIELD_URL}")
 print(f"   Threat Detector: Initialized")
 print(f"   Security Framework: Initialized")
+print(f"   PII Engine: Initialized")
+print(f"   Firewall Engine: Initialized")
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -72,28 +79,43 @@ def chat_completions():
     if not user_message:
         return jsonify({'error': 'No user message found'}), 400
     
-    # LAYER 1: Advanced threat detection (runs first for comprehensive checks)
     start_time = time.time()
+    
+    # LAYER 1: PII Detection (fast check for sensitive data)
+    try:
+        redacted_text, contains_pii = pii_engine.scan_and_redact(user_message)
+        if contains_pii:
+            signature = _get_agentshield_signature(user_message, 'BLOCK', 'PII_DETECTED')
+            return jsonify({
+                'error': 'PII detected in request',
+                'threat_detected': 'PII_LEAK',
+                'confidence': 0.95,
+                'latency_ms': round((time.time() - start_time) * 1000, 2),
+                'vigil_decision': 'BLOCK',
+                'ed25519_signature': signature
+            }), 403
+    except Exception as e:
+        print(f"⚠️  PII check failed: {e}")
+    
+    # LAYER 2: Firewall rules (fast pattern matching)
+    firewall_result = firewall.scan_input(user_message)
+    if not firewall_result.get('safe', True):
+        signature = _get_agentshield_signature(user_message, 'BLOCK', 'FIREWALL_RULE')
+        return jsonify({
+            'error': 'Firewall rule violation',
+            'threat_detected': 'FIREWALL_BLOCK',
+            'reason': firewall_result.get('reason', 'BLOCKED'),
+            'confidence': 0.90,
+            'latency_ms': round((time.time() - start_time) * 1000, 2),
+            'vigil_decision': 'BLOCK',
+            'ed25519_signature': signature
+        }), 403
+    
+    # LAYER 3: Advanced threat detection (comprehensive analysis)
     threat_result = detector.detect_threat(user_message)
     
     if threat_result['is_threat']:
-        # Get Ed25519 signature from AgentShield
-        signature = None
-        try:
-            response = requests.post(
-                f'{AGENTSHIELD_URL}/api/v1/sign',
-                json={
-                    'payload': user_message,
-                    'decision': 'BLOCK',
-                    'threat_type': threat_result['threat_type']
-                },
-                timeout=2
-            )
-            if response.status_code == 200:
-                signature = response.json().get('signature')
-        except Exception as e:
-            print(f"⚠️  AgentShield signing failed: {e}")
-        
+        signature = _get_agentshield_signature(user_message, 'BLOCK', threat_result['threat_type'])
         latency_ms = (time.time() - start_time) * 1000
         return jsonify({
             'error': 'Request blocked by security policy',
@@ -105,27 +127,11 @@ def chat_completions():
             'ed25519_signature': signature
         }), 403
     
-    # LAYER 2: Security framework analysis (for additional checks)
+    # LAYER 4: Security framework analysis (for additional checks)
     framework_result = framework.analyze_request(user_message, context={'api_key': api_key})
     
     if framework_result['action'] == 'BLOCK':
-        # Get Ed25519 signature
-        signature = None
-        try:
-            response = requests.post(
-                f'{AGENTSHIELD_URL}/api/v1/sign',
-                json={
-                    'payload': user_message,
-                    'decision': 'BLOCK',
-                    'threat_type': framework_result['threat_detected']
-                },
-                timeout=2
-            )
-            if response.status_code == 200:
-                signature = response.json().get('signature')
-        except Exception as e:
-            print(f"⚠️  AgentShield signing failed: {e}")
-        
+        signature = _get_agentshield_signature(user_message, 'BLOCK', framework_result['threat_detected'])
         latency_ms = (time.time() - start_time) * 1000
         return jsonify({
             'error': 'Request blocked by security framework',
@@ -140,21 +146,7 @@ def chat_completions():
     latency_ms = (time.time() - start_time) * 1000
     
     # Allow - return mock response with signature
-    signature = None
-    try:
-        response = requests.post(
-            f'{AGENTSHIELD_URL}/api/v1/sign',
-            json={
-                'payload': user_message,
-                'decision': 'ALLOW',
-                'risk_score': framework_result['risk_score']
-            },
-            timeout=2
-        )
-        if response.status_code == 200:
-            signature = response.json().get('signature')
-    except Exception as e:
-        print(f"⚠️  AgentShield signing failed: {e}")
+    signature = _get_agentshield_signature(user_message, 'ALLOW', None, framework_result['risk_score'])
     
     return jsonify({
         'id': f'chatcmpl-{int(time.time())}',
@@ -178,6 +170,25 @@ def chat_completions():
         'ed25519_signature': signature,
         'latency_ms': round(latency_ms, 2)
     }), 200
+
+def _get_agentshield_signature(payload: str, decision: str, threat_type: str = None, risk_score: float = 0.0) -> str:
+    """Helper to get Ed25519 signature from AgentShield"""
+    try:
+        response = requests.post(
+            f'{AGENTSHIELD_URL}/api/v1/sign',
+            json={
+                'payload': payload,
+                'decision': decision,
+                'threat_type': threat_type,
+                'risk_score': risk_score
+            },
+            timeout=2
+        )
+        if response.status_code == 200:
+            return response.json().get('signature')
+    except Exception as e:
+        print(f"⚠️  AgentShield signing failed: {e}")
+    return None
 
 @app.route('/api/v1/audit/logs', methods=['GET'])
 def get_audit_logs():

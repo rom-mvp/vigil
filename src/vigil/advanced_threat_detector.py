@@ -254,10 +254,13 @@ class CapabilityMatcher:
             r"\bsystem\b",  # Standalone "system" word (from ASCII art jailbreaks)
         ],
         "CHANGE_POLICY": [
-            r"\bignore\s+(?:all\s+)?(?:previous|above|prior)\s+(?:instructions|rules|commands)\b",
+            r"\b(ignore|disregard|bypass|forget|override|skip|neglect)\s+(?:all\s+)?(?:previous|above|prior|earlier|former)\s+(?:instructions?|rules?|commands?|directives?|prompts?)\b",
             r"\bignore(?:all)?(?:previous|prior|above)(?:instructions|rules)\b",
-            r"\bdisregard\s+(?:the\s+)?(?:above|previous)\s+(?:instructions|rules)\b",
-            r"\bforget\s+(?:about\s+)?(?:previous|above)\s+(?:instructions|rules)\b",
+            r"\bdisregard\s+(?:the\s+)?(?:above|previous|prior|all)\s+(?:instructions|rules)\b",
+            r"\bforget\s+(?:about\s+)?(?:previous|above|earlier|all)\s+(?:instructions|rules|context)\b",
+            r"\b(reset|clear|wipe)\s+(?:your|the)\s+(?:memory|context|instructions?)\b",
+            r"\boverride\s+(?:all\s+)?(?:previous|prior)\s+(?:rules?|instructions?)\b",
+            r"\bbypass\s+(?:all\s+)?(?:rules?|restrictions?|guidelines?)\b",
         ],
         "AUTHORITY_ESCALATION": [
             r"\bgive\s+me\s+(?:admin|administrator|root)\s+(?:privileges?|access)\b",
