@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  # Mock AgentShield service (for testing)
+  agentshield:
+    build:
+      context: .
+      dockerfile: Dockerfile.agentshield
+    container_name: vigil-agentshield
+    ports:
+      - "9000:9000"
+    environment:
+      - FLASK_APP=mock_agentshield.py
+      - FLASK_ENV=production
+      - PORT=9000
+    networks:
+      - vigil-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # Vigil security gateway
+  vigil:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vigil-gateway
+    user: "1000:1000"
+    command: /bin/sh -c "mkdir -p /app/logs && chown -R 1000:1000 /app/logs && python legacy/local_server.py"
+    ports:
+      - "8000:8000"
+    environment:
+      # AgentShield Integration
+      - AGENTSHIELD_URL=http://agentshield:9000
+      - AGENTSHIELD_JWKS_URL=http://agentshield:9000/v1/keys/jwks
+      - AGENTSHIELD_REQUIRE_SIGNED=false
+      - AGENTSHIELD_TIMEOUT_MS=3000
+      
+      # Policy Configuration
+      - MAX_RISK_SCORE=0.30
+      - DISALLOWED_REASONS=credential-exfil,tenant-boundary,privilege-escalation
+      
+      # Freshness Validation
+      - DECISION_MAX_AGE_SECONDS=300
+      
+      # Rate Limiting
+      - RATE_LIMIT_RPS=100
+      
+      # Allow fallback when AgentShield is unavailable
+      - AGENTSHIELD_REQUIRED=false
+      
+      # Logging
+      - LOG_LEVEL=INFO
+      - APPEND_LOG_PATH=/app/logs/vigil_audit.jsonl
+        - DASHBOARD_ADMIN_TOKEN=${DASHBOARD_ADMIN_TOKEN:-local-dev-token}
+    volumes:
+      - vigil-logs:/app/logs
+    networks:
+      - vigil-network
+    depends_on:
+      agentshield:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # Vigil Dashboard (Audit & Monitoring UI)
+  vigil-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: vigil-dashboard
+    ports:
+      # Expose dashboard on host port 300 (system expectation)
+      - "300:3000"
+    environment:
+      - DASHBOARD_SECRET_KEY=change-me-in-production
+      - DASHBOARD_ADMIN_TOKEN=local-dev-token
+      - VIGIL_GATEWAY_URL=http://vigil:8000
+      - APPEND_LOG_PATH=/app/logs/vigil_audit.jsonl
+    volumes:
+      - vigil-logs:/app/logs:ro
+    networks:
+      - vigil-network
+    depends_on:
+      - vigil
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  vigil-logs:
+    driver: local
+
+networks:
+  vigil-network:
+    driver: bridge

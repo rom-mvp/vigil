@@ -1,0 +1,93 @@
+# Dockerfile.cpu
+# LIGHTWEIGHT BUILD - Works on Mac M1/M2, Windows, Linux (No GPU needed)
+# 
+# This is the "developer-friendly" and "cost-effective" build that runs on:
+# - MacBook (M1/M2/M3)
+# - Windows laptops
+# - Linux without GPU
+# - Cheap cloud instances (no GPU premium)
+#
+# Performance: ~50-100ms per request (CPU inference)
+# Cost: $0.05-0.10/hour (standard compute)
+# Use Case: Development, staging, low-traffic production (<100 RPS)
+
+FROM python:3.11-slim
+
+LABEL maintainer="ROM MVP Team"
+LABEL description="Vigil Gateway - CPU Mode (No GPU Required)"
+
+WORKDIR /app
+
+# Install system dependencies (No CUDA/NVIDIA drivers)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libgomp1 \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and create CPU-specific version
+COPY requirements.txt .
+
+# CRITICAL: Install CPU version of ONNX Runtime
+# Remove GPU-specific packages and install CPU equivalents
+RUN grep -v "onnxruntime-gpu" requirements.txt > requirements.cpu.txt && \
+    echo "onnxruntime>=1.16.0" >> requirements.cpu.txt && \
+    pip install --no-cache-dir -r requirements.cpu.txt
+
+# Download spaCy model for PII detection
+RUN python3 -m spacy download en_core_web_sm
+
+# Copy application source
+COPY src/ src/
+COPY data/ data/
+COPY models/ models/
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/data /app/models && \
+    chmod -R 755 /app
+
+# Create non-root user for security
+RUN groupadd -r vigil && \
+    useradd -r -g vigil -u 1000 vigil && \
+    chown -R vigil:vigil /app
+
+USER vigil
+
+# Environment variables for CPU optimization
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    # Tell Vigil to use CPU-only inference
+    VIGIL_DEVICE_MODE="cpu" \
+    # Optimize NumPy/OpenMP for multi-core CPUs
+    OMP_NUM_THREADS=4 \
+    OPENBLAS_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4 \
+    # Disable GPU libraries
+    CUDA_VISIBLE_DEVICES="" \
+    # Application defaults
+    VIGIL_ENVIRONMENT="production" \
+    VIGIL_FAIL_MODE="closed"
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+EXPOSE 8000
+
+# Run with Gunicorn for production (multi-worker)
+# For development, override with: python3 -m src.vigil.local_server
+CMD ["gunicorn", "-w", "4", "-k", "gevent", "-b", "0.0.0.0:8000", "--timeout", "120", "--log-level", "info", "src.vigil.local_server:app"]
+
+# Usage:
+# Build:  docker build -f Dockerfile.cpu -t vigil:cpu .
+# Run:    docker run -p 8000:8000 -e REDIS_URL=redis://... vigil:cpu
+# Test:   curl http://localhost:8000/health
+#
+# Performance Notes:
+# - CPU inference: ~50-100ms per embedding (vs ~5-10ms GPU)
+# - Suitable for: <100 RPS, development, staging environments
+# - Cost: Standard compute pricing (no GPU premium)
+# - Memory: 2-4GB RAM recommended
+#
+# For high-throughput production (>1000 RPS), use Dockerfile.prod with GPU

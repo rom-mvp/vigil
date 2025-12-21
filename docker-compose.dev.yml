@@ -1,0 +1,188 @@
+# docker-compose.dev.yml
+# Developer-friendly setup using CPU mode (No GPU required)
+# Works on: Mac M1/M2, Windows, Linux (any CPU)
+#
+# Usage: docker-compose -f docker-compose.dev.yml up -d
+
+version: '3.8'
+
+services:
+  # Redis - Shared state for API keys, rate limits, billing
+  redis:
+    image: redis:7-alpine
+    container_name: vigil-redis-dev
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass devpassword
+    volumes:
+      - redis-dev-data:/data
+    networks:
+      - vigil-dev-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "devpassword", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # PostgreSQL - AgentShield policies and vault
+  postgres:
+    image: postgres:15-alpine
+    container_name: vigil-postgres-dev
+    environment:
+      POSTGRES_USER: agentshield
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: agentshield
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+    networks:
+      - vigil-dev-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentshield"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # AgentShield - Control plane (CPU only)
+  agentshield:
+    image: agentshield:latest
+    container_name: vigil-agentshield-dev
+    build:
+      context: ../agentshield
+      dockerfile: Dockerfile
+    ports:
+      - "9000:9000"
+    environment:
+      # Database
+      DATABASE_URL: postgresql://agentshield:devpassword@postgres:5432/agentshield
+      # Redis
+      REDIS_URL: redis://:devpassword@redis:6379/0
+      # Vault encryption (generate with: openssl rand -base64 32)
+      VAULT_ENCRYPTION_KEY: ${VAULT_ENCRYPTION_KEY:-dev_key_change_in_production_32b}
+      # Ed25519 signing keys (generate with: python -c "from cryptography.hazmat.primitives.asymmetric import ed25519; private_key = ed25519.Ed25519PrivateKey.generate(); print(private_key.private_bytes(...))") 
+      ED25519_PRIVATE_KEY: ${ED25519_PRIVATE_KEY:-}
+      ED25519_PUBLIC_KEY: ${ED25519_PUBLIC_KEY:-}
+      # Environment
+      AGENTSHIELD_ENVIRONMENT: development
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - vigil-dev-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Vigil Gateway - Edge service (CPU mode - No GPU)
+  vigil:
+    image: vigil:cpu
+    container_name: vigil-gateway-dev
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    ports:
+      - "8000:8000"
+    environment:
+      # Redis
+      REDIS_URL: redis://:devpassword@redis:6379/0
+      # AgentShield
+      AGENTSHIELD_URL: http://agentshield:9000
+      AGENTSHIELD_TIMEOUT_MS: 3000
+      AGENTSHIELD_REQUIRED: "true"
+      # Device mode (CPU only)
+      VIGIL_DEVICE_MODE: cpu
+      # Vigil behavior
+      VIGIL_ENVIRONMENT: development
+      VIGIL_FAIL_MODE: open
+      # Paths
+      VECTOR_MODEL_PATH: /app/models/all-MiniLM-L6-v2.onnx
+      VECTOR_DB_PATH: /app/data/threat_vectors.jsonl
+      APPEND_LOG_PATH: /app/logs/append_only.jsonl
+      # Optimization
+      OMP_NUM_THREADS: 4
+      OPENBLAS_NUM_THREADS: 4
+      MKL_NUM_THREADS: 4
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+      - vigil-dev-logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      agentshield:
+        condition: service_healthy
+    networks:
+      - vigil-dev-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Dashboard - Web UI for analytics
+  dashboard:
+    image: vigil-dashboard:latest
+    container_name: vigil-dashboard-dev
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "8080:8080"
+    environment:
+      AGENTSHIELD_URL: http://agentshield:9000
+      VIGIL_URL: http://vigil:8000
+    depends_on:
+      - vigil
+      - agentshield
+    networks:
+      - vigil-dev-network
+
+volumes:
+  redis-dev-data:
+    driver: local
+  postgres-dev-data:
+    driver: local
+  vigil-dev-logs:
+    driver: local
+
+networks:
+  vigil-dev-network:
+    driver: bridge
+
+# Usage:
+# 1. Start all services:
+#    docker-compose -f docker-compose.dev.yml up -d
+#
+# 2. Check health:
+#    curl http://localhost:8000/health  # Vigil Gateway
+#    curl http://localhost:9000/health  # AgentShield
+#
+# 3. Create API key:
+#    docker exec vigil-redis-dev redis-cli -a devpassword \
+#      HSET api_keys:vk_dev_test123 \
+#      tenant_id "my-company" \
+#      tier "pro" \
+#      status "active" \
+#      created_at $(date +%s)
+#
+# 4. Test request:
+#    curl -X POST http://localhost:8000/chat/completions \
+#      -H "Authorization: Bearer vk_dev_test123" \
+#      -H "Content-Type: application/json" \
+#      -d '{"model":"gpt-4","messages":[{"role":"user","content":"Hello"}]}'
+#
+# 5. View logs:
+#    docker-compose -f docker-compose.dev.yml logs -f vigil
+#
+# 6. Stop all services:
+#    docker-compose -f docker-compose.dev.yml down
+#
+# 7. Clean up volumes:
+#    docker-compose -f docker-compose.dev.yml down -v

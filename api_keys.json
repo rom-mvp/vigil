@@ -1,0 +1,11 @@
+{
+  "keys": [
+    {
+      "hash": "f80c9e15fb32c3fb9dbf45dc830f25422466693dd72635174a890845c7bdd1c8",
+      "username": "test_user",
+      "description": "test key",
+      "active": true,
+      "created_at": "2024-12-21"
+    }
+  ]
+}

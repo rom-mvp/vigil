@@ -1,0 +1,24 @@
+{
+  "name": "vigil",
+  "version": "1.0.0",
+  "description": "Pre-LLM Security Gateway",
+  "scripts": {
+    "start": "./start.sh",
+    "stop": "pkill -f 'python.*local_server.py|python.*mock_agentshield.py' || true",
+    "logs": "tail -f /tmp/agentshield.log /tmp/gateway.log",
+    "test": "cd tests && PYTHONPATH=../src pytest test_normalization.py -v",
+    "health": "curl -s http://localhost:9000/health && curl -s http://localhost:8000/health && echo '\\n✅ All services healthy'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rom-mvp/vigil"
+  },
+  "keywords": [
+    "security",
+    "llm",
+    "gateway",
+    "agentshield"
+  ],
+  "author": "rom-mvp",
+  "license": "MIT"
+}

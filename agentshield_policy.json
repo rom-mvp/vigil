@@ -1,0 +1,19 @@
+{
+  "sgx_mrenclave": [
+    "// Add allowed SGX MRENCLAVE values here",
+    "// Example: '3d4aa3e42cb6a66879b3a4b7e1a9e14c...'"
+  ],
+  "sgx_mrsigner": [
+    "// Add allowed SGX MRSIGNER values here"
+  ],
+  "sev_measurement": [
+    "// Add allowed SEV-SNP measurement values here"
+  ],
+  "tdx_mrtd": [
+    "// Add allowed TDX MRTD values here"
+  ],
+  "azure_measurement": [
+    "// Add allowed Azure CC measurements here"
+  ],
+  "_comment": "Empty arrays accept all measurements. Add specific hashes to restrict."
+}

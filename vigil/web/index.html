@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Vigil by AgentShield</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-50">
+  <div class="min-h-screen flex flex-col">
+    <!-- Header -->
+    <header class="border-b border-slate-800 px-8 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="h-8 w-8 rounded-full bg-indigo-500 flex items-center justify-center text-xs font-bold">VG</div>
+        <div>
+          <div class="font-semibold">Vigil Console</div>
+          <div class="text-xs text-slate-400">AgentShield Trust, Policy &amp; Identity</div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-4 text-xs text-slate-300">
+        <!-- Environment selector -->
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">Env</span>
+          <select
+            id="env-select"
+            class="bg-slate-900 border border-slate-700 rounded-full px-2 py-1 text-xs text-slate-100"
+            onchange="onEnvChange()"
+          >
+            <option value="local">Local</option>
+            <option value="staging">Staging</option>
+            <option value="prod">Prod</option>
+          </select>
+          <span id="env-label" class="text-indigo-300 text-[10px]"></span>
+        </div>
+
+        <!-- Tenant selector -->
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">Tenant</span>
+          <input
+            id="tenant-input"
+            type="text"
+            class="bg-slate-900 border border-slate-700 rounded-full px-2 py-1 text-xs text-slate-100 w-32"
+            placeholder="dev-tenant"
+            onblur="onTenantChange()"
+          />
+        </div>
+
+        <!-- Role selector -->
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">Role</span>
+          <select
+            id="role-select"
+            class="bg-slate-900 border border-slate-700 rounded-full px-2 py-1 text-xs text-slate-100"
+            onchange="onRoleChange()"
+          >
+            <option value="TENANT_ADMIN">Tenant Admin</option>
+            <option value="DEVELOPER">Developer</option>
+            <option value="VIEWER">Viewer</option>
+          </select>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main -->
+    <main class="flex-1 px-8 py-6 space-y-6">
+      <!-- Tabs -->
+      <nav class="flex gap-2 border-b border-slate-800 pb-2 text-xs">
+        <button class="tab-button px-3 py-1 rounded-full bg-slate-800 text-slate-50" data-tab="overview">Overview</button>
+        <button class="tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60" data-tab="policies">Policies</button>
+        <button class="tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60" data-tab="agents">Agents</button>
+        <button class="tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60" data-tab="billing">Billing</button>
+        <button class="tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60" data-tab="network">Network</button>
+      </nav>
+
+      <!-- Overview Tab -->
+      <section id="tab-overview" class="tab-panel space-y-4">
+        <h2 class="text-sm font-semibold text-slate-200">Runtime Overview</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400">Total Requests</div>
+            <div id="stat-total-requests" class="mt-2 text-2xl font-semibold text-slate-50">—</div>
+          </div>
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400">Blocked Attacks</div>
+            <div id="stat-blocked-attacks" class="mt-2 text-2xl font-semibold text-rose-400">—</div>
+          </div>
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400">PII Redactions</div>
+            <div id="stat-redacted-events" class="mt-2 text-2xl font-semibold text-emerald-400">—</div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between mt-4">
+          <h3 class="text-xs font-semibold text-slate-300">Recent Events</h3>
+          <button
+            class="text-xs px-2 py-1 rounded-full border border-slate-700 hover:border-slate-500 text-slate-300"
+            onclick="loadOverview()"
+          >
+            Refresh
+          </button>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-900 border-b border-slate-800">
+              <tr>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Time</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Tenant</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Agent</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Phase</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Blocked</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">PII</th>
+              </tr>
+            </thead>
+            <tbody id="events-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Policies Tab -->
+      <section id="tab-policies" class="tab-panel hidden space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-200">Policies</h2>
+          <button
+            id="create-policy-button"
+            class="text-xs px-3 py-1 rounded-full bg-indigo-500 hover:bg-indigo-400 text-slate-50"
+            onclick="openCreatePolicyModal()"
+          >
+            + New Policy
+          </button>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-900 border-b border-slate-800">
+              <tr>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Name</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Description</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Priority</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Rules</th>
+              </tr>
+            </thead>
+            <tbody id="policies-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Agents Tab -->
+      <section id="tab-agents" class="tab-panel hidden space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-slate-200">Agents</h2>
+          <button
+            id="create-agent-button"
+            class="text-xs px-3 py-1 rounded-full bg-indigo-500 hover:bg-indigo-400 text-slate-50"
+            onclick="openCreateAgentModal()"
+          >
+            + New Agent
+          </button>
+        </div>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-900 border-b border-slate-800">
+              <tr>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Agent ID</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Roles</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">API Key</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Active</th>
+              </tr>
+            </thead>
+            <tbody id="agents-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Billing Tab -->
+      <section id="tab-billing" class="tab-panel hidden space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h2 class="text-sm font-semibold text-slate-200">Billing &amp; Usage</h2>
+            <p class="text-xs text-slate-400">
+              Monthly usage, invoice forecast, quota posture, and plan guardrails.
+            </p>
+          </div>
+          <button
+            id="billing-refresh"
+            class="text-xs px-3 py-1 rounded-full border border-slate-700 hover:border-slate-500 text-slate-300 self-start sm:self-auto"
+            onclick="loadBilling()"
+          >
+            Refresh
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-2">
+            <div class="text-xs text-slate-400">Monthly Usage</div>
+            <div class="text-2xl font-semibold text-slate-50" id="billing-usage-month">—</div>
+            <dl class="text-xs text-slate-300 space-y-1" id="billing-usage-stats">
+              <div class="flex justify-between">
+                <dt class="text-slate-400">Requests</dt>
+                <dd id="billing-usage-requests">—</dd>
+              </div>
+              <div class="flex justify-between">
+                <dt class="text-slate-400">Tokens</dt>
+                <dd id="billing-usage-tokens">—</dd>
+              </div>
+              <div class="flex justify-between">
+                <dt class="text-slate-400">Runtime Hours</dt>
+                <dd id="billing-usage-runtime">—</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-2">
+            <div class="text-xs text-slate-400">Estimated Invoice</div>
+            <div class="text-2xl font-semibold text-indigo-300" id="billing-invoice-amount">—</div>
+            <div class="text-xs text-slate-400">
+              Due <span id="billing-invoice-due">—</span>
+            </div>
+            <div class="text-[11px] text-slate-500" id="billing-invoice-note"></div>
+          </div>
+
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-2">
+            <div class="text-xs text-slate-400">Quota Remaining</div>
+            <dl class="text-xs text-slate-300 space-y-2" id="billing-quota">
+              <div>
+                <div class="flex justify-between text-[11px] text-slate-400">
+                  <span>Requests</span>
+                  <span id="billing-quota-requests-label">—</span>
+                </div>
+                <div class="h-2 bg-slate-800 rounded-full mt-1">
+                  <div id="billing-quota-requests-bar" class="h-2 rounded-full bg-emerald-400 transition-all" style="width: 0%"></div>
+                </div>
+              </div>
+              <div>
+                <div class="flex justify-between text-[11px] text-slate-400">
+                  <span>Spend</span>
+                  <span id="billing-quota-spend-label">—</span>
+                </div>
+                <div class="h-2 bg-slate-800 rounded-full mt-1">
+                  <div id="billing-quota-spend-bar" class="h-2 rounded-full bg-indigo-400 transition-all" style="width: 0%"></div>
+                </div>
+              </div>
+            </dl>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-slate-800 text-xs text-slate-400">Breakdown by Model</div>
+            <table class="min-w-full text-xs">
+              <thead class="bg-slate-900 border-b border-slate-800 text-slate-400">
+                <tr>
+                  <th class="text-left px-4 py-2 font-medium">Model</th>
+                  <th class="text-left px-4 py-2 font-medium">Requests</th>
+                  <th class="text-left px-4 py-2 font-medium">Spend</th>
+                </tr>
+              </thead>
+              <tbody id="billing-model-table-body"></tbody>
+            </table>
+          </div>
+
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-slate-800 text-xs text-slate-400">Breakdown by Agent</div>
+            <table class="min-w-full text-xs">
+              <thead class="bg-slate-900 border-b border-slate-800 text-slate-400">
+                <tr>
+                  <th class="text-left px-4 py-2 font-medium">Agent</th>
+                  <th class="text-left px-4 py-2 font-medium">Requests</th>
+                  <th class="text-left px-4 py-2 font-medium">Spend</th>
+                </tr>
+              </thead>
+              <tbody id="billing-agent-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400 mb-2">Plan Features</div>
+            <ul id="billing-plan-features" class="text-xs text-slate-300 space-y-1"></ul>
+          </div>
+          <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
+            <div class="text-xs text-slate-400 mb-2">Audit Trail</div>
+            <p id="billing-audit-trail" class="text-xs text-slate-300">
+              Billing telemetry is scoped to the active tenant. Switch tenants to validate isolation.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Network Tab -->
+      <section id="tab-network" class="tab-panel hidden space-y-4">
+        <h2 class="text-sm font-semibold text-slate-200">Agent Identity Network</h2>
+        <p class="text-xs text-slate-400">
+          Early view of cross-tenant trust relationships for Phase 3.
+        </p>
+        <div class="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden">
+          <table class="min-w-full text-xs">
+            <thead class="bg-slate-900 border-b border-slate-800">
+              <tr>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">From Tenant</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">To Tenant</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Trust Score</th>
+                <th class="text-left px-4 py-2 text-slate-400 font-medium">Last Updated</th>
+              </tr>
+            </thead>
+            <tbody id="network-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    // ---- ENV & TENANT CONFIG ----
+
+    const DEFAULT_CONFIG = {
+      env: "local",
+      tenantId: "dev-tenant",
+      role: "TENANT_ADMIN",
+    };
+
+    // Map environments → base URLs for each service
+    const ENV_CONFIG = {
+      local: {
+        label: "Local Dev",
+        AUDIT_API: "http://localhost:8200",
+        POLICY_API: "http://localhost:8100",
+        IDENTITY_API: "http://localhost:8300",
+        PROTOCOL_API: "http://localhost:8400",
+        BILLING_API: "http://localhost:8500",
+      },
+      staging: {
+        label: "Staging",
+        AUDIT_API: "https://staging-audit.agentshield.yourdomain.com",
+        POLICY_API: "https://staging-policy.agentshield.yourdomain.com",
+        IDENTITY_API: "https://staging-identity.agentshield.yourdomain.com",
+        PROTOCOL_API: "https://staging-protocol.agentshield.yourdomain.com",
+        BILLING_API: "https://staging-billing.agentshield.yourdomain.com",
+      },
+      prod: {
+        label: "Production",
+        AUDIT_API: "https://audit.agentshield.yourdomain.com",
+        POLICY_API: "https://policy.agentshield.yourdomain.com",
+        IDENTITY_API: "https://identity.agentshield.yourdomain.com",
+        PROTOCOL_API: "https://protocol.agentshield.yourdomain.com",
+        BILLING_API: "https://billing.agentshield.yourdomain.com",
+      },
+    };
+
+    const RBAC_MATRIX = {
+      TENANT_ADMIN: {
+        label: "Tenant Admin",
+        canManagePolicies: true,
+        canManageAgents: true,
+        canViewBilling: true,
+        allowedTabs: ["overview", "policies", "agents", "billing", "network"],
+      },
+      DEVELOPER: {
+        label: "Developer",
+        canManagePolicies: true,
+        canManageAgents: false,
+        canViewBilling: false,
+        allowedTabs: ["overview", "policies", "agents", "network"],
+      },
+      VIEWER: {
+        label: "Viewer",
+        canManagePolicies: false,
+        canManageAgents: false,
+        canViewBilling: true,
+        allowedTabs: ["overview", "policies", "agents", "billing", "network"],
+      },
+    };
+
+    function loadConsoleConfig() {
+      try {
+        const raw = localStorage.getItem("vigil_console_config");
+        if (!raw) return { ...DEFAULT_CONFIG };
+        const parsed = JSON.parse(raw);
+        return {
+          env: parsed.env || DEFAULT_CONFIG.env,
+          tenantId: parsed.tenantId || DEFAULT_CONFIG.tenantId,
+          role: parsed.role || DEFAULT_CONFIG.role,
+        };
+      } catch (e) {
+        return { ...DEFAULT_CONFIG };
+      }
+    }
+
+    function saveConsoleConfig(cfg) {
+      localStorage.setItem("vigil_console_config", JSON.stringify(cfg));
+    }
+
+    function getCurrentEnvConfig() {
+      const cfg = loadConsoleConfig();
+      return { cfg, envCfg: ENV_CONFIG[cfg.env] || ENV_CONFIG.local };
+    }
+
+    function getBaseUrl(serviceName) {
+      const { envCfg } = getCurrentEnvConfig();
+      return envCfg[serviceName];
+    }
+
+    function getTenantId() {
+      const { cfg } = getCurrentEnvConfig();
+      return cfg.tenantId;
+    }
+
+    function getCurrentRole() {
+      const { cfg } = getCurrentEnvConfig();
+      return cfg.role || DEFAULT_CONFIG.role;
+    }
+
+    function getRolePermissions() {
+      return RBAC_MATRIX[getCurrentRole()] || RBAC_MATRIX.TENANT_ADMIN;
+    }
+
+    // Called when env dropdown changes
+    function onEnvChange() {
+      const select = document.getElementById("env-select");
+      const env = select.value;
+      const cfg = loadConsoleConfig();
+      cfg.env = env;
+      saveConsoleConfig(cfg);
+      updateHeaderFromConfig();
+      // reload current tab data after env change
+      reloadActiveTab();
+    }
+
+    // Called when tenant input loses focus
+    function onTenantChange() {
+      const input = document.getElementById("tenant-input");
+      const tenantId = input.value.trim() || DEFAULT_CONFIG.tenantId;
+      const cfg = loadConsoleConfig();
+      cfg.tenantId = tenantId;
+      saveConsoleConfig(cfg);
+      updateHeaderFromConfig();
+      // reload current tab data after tenant change
+      reloadActiveTab();
+    }
+
+    function onRoleChange() {
+      const select = document.getElementById("role-select");
+      const role = select.value;
+      const cfg = loadConsoleConfig();
+      cfg.role = role;
+      saveConsoleConfig(cfg);
+      applyRbacState();
+      reloadActiveTab();
+    }
+
+    function updateHeaderFromConfig() {
+      const { cfg, envCfg } = getCurrentEnvConfig();
+      const envLabelEl = document.getElementById("env-label");
+      const envSelect = document.getElementById("env-select");
+      const tenantInput = document.getElementById("tenant-input");
+      const roleSelect = document.getElementById("role-select");
+
+      if (envLabelEl) envLabelEl.textContent = envCfg.label;
+      if (envSelect) envSelect.value = cfg.env;
+      if (tenantInput) tenantInput.value = cfg.tenantId;
+      if (roleSelect) roleSelect.value = cfg.role;
+    }
+
+    function applyRbacState() {
+      const perms = getRolePermissions();
+
+      toggleActionButton(
+        document.getElementById("create-policy-button"),
+        perms.canManagePolicies,
+        "Current role cannot create or edit policies."
+      );
+      toggleActionButton(
+        document.getElementById("create-agent-button"),
+        perms.canManageAgents,
+        "Current role cannot create or rotate agents."
+      );
+
+      const billingButton = document.querySelector('.tab-button[data-tab="billing"]');
+      const billingPanel = document.getElementById("tab-billing");
+      const showBilling = perms.canViewBilling;
+      if (billingButton) billingButton.classList.toggle("hidden", !showBilling);
+      if (billingPanel) billingPanel.classList.toggle("hidden", !showBilling);
+
+      const allowedTabs = new Set(perms.allowedTabs);
+      document.querySelectorAll(".tab-button").forEach(btn => {
+        const allowed = allowedTabs.has(btn.dataset.tab);
+        btn.disabled = !allowed;
+        btn.classList.toggle("opacity-40", !allowed);
+        btn.classList.toggle("cursor-not-allowed", !allowed);
+      });
+
+      const active = document.querySelector(".tab-button.bg-slate-800");
+      const activeTab = active?.dataset.tab;
+      if (activeTab && !allowedTabs.has(activeTab)) {
+        setActiveTab("overview");
+      } else if (!showBilling && activeTab === "billing") {
+        setActiveTab("overview");
+      }
+    }
+
+    function toggleActionButton(button, enabled, tooltip) {
+      if (!button) return;
+      button.disabled = !enabled;
+      button.classList.toggle("opacity-40", !enabled);
+      button.classList.toggle("cursor-not-allowed", !enabled);
+      button.title = enabled ? "" : tooltip;
+    }
+
+    // ---- Overview ----
+    async function loadOverview() {
+      try {
+        const auditApi = getBaseUrl("AUDIT_API");
+        const res = await fetch(`${auditApi}/api/overview`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const stats = data.stats || {};
+        const events = data.recent_events || [];
+
+        document.getElementById("stat-total-requests").innerText = stats.total_requests ?? "0";
+        document.getElementById("stat-blocked-attacks").innerText = stats.blocked_attacks ?? "0";
+        document.getElementById("stat-redacted-events").innerText = stats.redacted_events ?? "0";
+
+        const tbody = document.getElementById("events-table-body");
+        tbody.innerHTML = "";
+
+        if (!events.length) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="6" class="px-4 py-4 text-center text-slate-500">
+              No events yet. Send a request through the AgentShield gateway.
+            </td>`;
+          tbody.appendChild(row);
+          return;
+        }
+
+        for (const ev of events) {
+          const row = document.createElement("tr");
+          row.className = "border-t border-slate-800/60";
+          row.innerHTML = `
+            <td class="px-4 py-2 text-slate-300">${escapeHtml(ev.timestamp)}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(ev.tenant_id || "-")}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(ev.agent_id || "-")}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(ev.phase || "-")}</td>
+            <td class="px-4 py-2">
+              ${ev.blocked
+                ? '<span class="text-rose-400 font-semibold">Yes</span>'
+                : '<span class="text-emerald-400">No</span>'}
+            </td>
+            <td class="px-4 py-2 text-slate-400">${ev.pii_event_count || 0}</td>
+          `;
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        console.error("Failed to load overview", err);
+      }
+    }
+
+    // ---- Policies ----
+    async function loadPolicies() {
+      try {
+        const tenantId = getTenantId();
+        const policyApi = getBaseUrl("POLICY_API");
+        const res = await fetch(`${policyApi}/tenants/${encodeURIComponent(tenantId)}/policies`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const policies = await res.json();
+        const tbody = document.getElementById("policies-table-body");
+        tbody.innerHTML = "";
+
+        if (!policies.length) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="4" class="px-4 py-4 text-center text-slate-500">
+              No policies yet. Click "New Policy" to create one.
+            </td>`;
+          tbody.appendChild(row);
+          return;
+        }
+
+        for (const p of policies) {
+          const row = document.createElement("tr");
+          row.className = "border-t border-slate-800/60";
+          row.innerHTML = `
+            <td class="px-4 py-2 text-slate-300">${escapeHtml(p.name)}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(p.description || "")}</td>
+            <td class="px-4 py-2 text-slate-400">${p.priority ?? 0}</td>
+            <td class="px-4 py-2 text-slate-400">${(p.rules || []).length}</td>
+          `;
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        console.error("Failed to load policies", err);
+      }
+    }
+
+    function openCreatePolicyModal() {
+      if (!getRolePermissions().canManagePolicies) {
+        alert("You do not have permission to create policies.");
+        return;
+      }
+      const tenantId = getTenantId();
+      const policyApi = getBaseUrl("POLICY_API");
+      const name = prompt("Policy name (e.g. 'Deny data deletion')");
+      if (!name) return;
+      const description = prompt("Description");
+      const body = {
+        id: `pol_${Date.now()}`,
+        name,
+        description: description || "",
+        priority: 100,
+        rules: [],
+      };
+      fetch(`${policyApi}/tenants/${encodeURIComponent(tenantId)}/policies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then(() => loadPolicies())
+        .catch(err => console.error("Failed to create policy", err));
+    }
+
+    // ---- Agents ----
+    async function loadAgents() {
+      try {
+        const tenantId = getTenantId();
+        const identityApi = getBaseUrl("IDENTITY_API");
+        const res = await fetch(`${identityApi}/tenants/${encodeURIComponent(tenantId)}/agents`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const agents = await res.json();
+        const tbody = document.getElementById("agents-table-body");
+        tbody.innerHTML = "";
+
+        if (!agents.length) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="4" class="px-4 py-4 text-center text-slate-500">
+              No agents yet. Click "New Agent" to create one.
+            </td>`;
+          tbody.appendChild(row);
+          return;
+        }
+
+        for (const a of agents) {
+          const row = document.createElement("tr");
+          row.className = "border-t border-slate-800/60";
+          row.innerHTML = `
+            <td class="px-4 py-2 text-slate-300">${escapeHtml(a.agent_id)}</td>
+            <td class="px-4 py-2 text-slate-400">${(a.roles || []).join(", ")}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(a.api_key || "hidden")}</td>
+            <td class="px-4 py-2">
+              ${a.active
+                ? '<span class="text-emerald-400">Active</span>'
+                : '<span class="text-slate-500">Disabled</span>'}
+            </td>
+          `;
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        console.error("Failed to load agents", err);
+      }
+    }
+
+    function openCreateAgentModal() {
+      if (!getRolePermissions().canManageAgents) {
+        alert("You do not have permission to create agents.");
+        return;
+      }
+      const tenantId = getTenantId();
+      const identityApi = getBaseUrl("IDENTITY_API");
+      const agentId = prompt("Agent ID (e.g. 'support-bot')");
+      if (!agentId) return;
+      const roles = prompt("Roles (comma separated, e.g. 'support,read-only')");
+      const payload = {
+        agent_id: agentId,
+        roles: roles ? roles.split(",").map(r => r.trim()) : [],
+      };
+      fetch(`${identityApi}/tenants/${encodeURIComponent(tenantId)}/agents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .then(() => loadAgents())
+        .catch(err => console.error("Failed to create agent", err));
+    }
+
+    // ---- Network ----
+    async function loadNetwork() {
+      try {
+        const protocolApi = getBaseUrl("PROTOCOL_API");
+        const res = await fetch(`${protocolApi}/trust-graph`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const items = await res.json();
+        const tbody = document.getElementById("network-table-body");
+        tbody.innerHTML = "";
+
+        if (!items.length) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="4" class="px-4 py-4 text-center text-slate-500">
+              No cross-tenant relationships recorded yet.
+            </td>`;
+          tbody.appendChild(row);
+          return;
+        }
+
+        for (const tr of items) {
+          const row = document.createElement("tr");
+          row.className = "border-t border-slate-800/60";
+          row.innerHTML = `
+            <td class="px-4 py-2 text-slate-300">${escapeHtml(tr.from_tenant)}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(tr.to_tenant)}</td>
+            <td class="px-4 py-2 text-slate-400">${tr.score ?? 0}</td>
+            <td class="px-4 py-2 text-slate-400">${escapeHtml(tr.last_updated || "-")}</td>
+          `;
+          tbody.appendChild(row);
+        }
+      } catch (err) {
+        console.error("Failed to load network", err);
+      }
+    }
+
+    // ---- Billing ----
+    async function loadBilling() {
+      const tenantId = getTenantId();
+      const billingApi = getBaseUrl("BILLING_API");
+      const refreshBtn = document.getElementById("billing-refresh");
+      const perms = getRolePermissions();
+
+      if (!perms.canViewBilling) {
+        renderBillingUnavailable("Billing is restricted for your current role.");
+        return;
+      }
+
+      if (!billingApi) {
+        renderBillingUnavailable("No billing endpoint configured for this environment.");
+        return;
+      }
+
+      if (refreshBtn) refreshBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${billingApi}/tenants/${encodeURIComponent(tenantId)}/billing`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        renderBillingSummary(data);
+      } catch (err) {
+        console.error("Failed to load billing", err);
+        renderBillingUnavailable("Billing data unavailable. Verify the Billing API is reachable.");
+      } finally {
+        if (refreshBtn) refreshBtn.disabled = false;
+      }
+    }
+
+    function renderBillingSummary(payload) {
+      const monthLabel = payload?.month_label || payload?.month || "Current Month";
+      setText("billing-usage-month", monthLabel);
+
+      const usage = payload?.monthly_usage || {};
+      setText("billing-usage-requests", formatNumber(usage.requests));
+      setText("billing-usage-tokens", formatNumber(usage.tokens));
+      setText("billing-usage-runtime", formatNumber(usage.runtime_hours));
+
+      const invoice = payload?.estimated_invoice || {};
+      setText("billing-invoice-amount", formatCurrency(invoice.amount, invoice.currency));
+      setText("billing-invoice-due", invoice.due_date ? formatDateLabel(invoice.due_date) : "—");
+      setText(
+        "billing-invoice-note",
+        invoice.notes || "Forecast blends model spend, gateway tolls, and seat fees."
+      );
+
+      updateQuotaWidget("requests", payload?.quota_remaining?.requests);
+      updateQuotaWidget("spend", payload?.quota_remaining?.spend);
+
+      renderBreakdownTable("billing-model-table-body", payload?.model_breakdown, {
+        empty: "No model usage recorded for this period.",
+        key: "model",
+      });
+      renderBreakdownTable("billing-agent-table-body", payload?.agent_breakdown, {
+        empty: "No agent usage recorded for this period.",
+        key: "agent_id",
+      });
+
+      const featuresList = document.getElementById("billing-plan-features");
+      featuresList.innerHTML = "";
+      const features = payload?.plan_features && payload.plan_features.length ? payload.plan_features : [
+        "Dedicated rate-limit guardrails",
+        "Tenant-scoped audit exports",
+        "PII redaction credits",
+      ];
+      features.forEach(item => {
+        const li = document.createElement("li");
+        li.innerHTML = `• ${escapeHtml(item)}`;
+        featuresList.appendChild(li);
+      });
+
+      const auditNote = payload?.audit_trail
+        ? payload.audit_trail
+        : `Last scoped sample: ${formatDateLabel(new Date().toISOString())}`;
+      setText("billing-audit-trail", auditNote);
+    }
+
+    function renderBillingUnavailable(message) {
+      setText("billing-usage-month", "—");
+      ["requests", "tokens", "runtime"].forEach(metric => setText(`billing-usage-${metric}`, "—"));
+      ["amount", "due", "note"].forEach(field => setText(`billing-invoice-${field}`, message));
+      ["requests", "spend"].forEach(metric => {
+        setText(`billing-quota-${metric}-label`, "—");
+        const bar = document.getElementById(`billing-quota-${metric}-bar`);
+        if (bar) bar.style.width = "0%";
+      });
+
+      const modelBody = document.getElementById("billing-model-table-body");
+      const agentBody = document.getElementById("billing-agent-table-body");
+      [modelBody, agentBody].forEach(tbody => {
+        if (!tbody) return;
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="3" class="px-4 py-4 text-center text-slate-500">
+              ${escapeHtml(message)}
+            </td>
+          </tr>`;
+      });
+
+      const featuresList = document.getElementById("billing-plan-features");
+      if (featuresList) {
+        featuresList.innerHTML = `<li class="text-slate-500">${escapeHtml(message)}</li>`;
+      }
+      setText("billing-audit-trail", message);
+    }
+
+    function renderBreakdownTable(tbodyId, items, { empty, key }) {
+      const tbody = document.getElementById(tbodyId);
+      if (!tbody) return;
+      tbody.innerHTML = "";
+      if (!items || !items.length) {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td colspan="3" class="px-4 py-4 text-center text-slate-500">
+            ${escapeHtml(empty)}
+          </td>`;
+        tbody.appendChild(row);
+        return;
+      }
+
+      for (const entry of items) {
+        const row = document.createElement("tr");
+        row.className = "border-t border-slate-800/60";
+        row.innerHTML = `
+          <td class="px-4 py-2 text-slate-300">${escapeHtml(entry[key] || "-")}</td>
+          <td class="px-4 py-2 text-slate-400">${formatNumber(entry.requests)}</td>
+          <td class="px-4 py-2 text-slate-400">${formatCurrency(entry.spend)}</td>
+        `;
+        tbody.appendChild(row);
+      }
+    }
+
+    function updateQuotaWidget(metric, data) {
+      const labelEl = document.getElementById(`billing-quota-${metric}-label`);
+      const barEl = document.getElementById(`billing-quota-${metric}-bar`);
+      if (!labelEl || !barEl) return;
+
+      const limit = data?.limit ?? 0;
+      const used = data?.used ?? 0;
+      const remaining = Math.max(limit - used, 0);
+      const pct = limit ? Math.min(100, Math.round((remaining / limit) * 100)) : 0;
+
+      labelEl.textContent = limit
+        ? `${formatNumber(remaining)} of ${formatNumber(limit)} remaining`
+        : "Quota unknown";
+      barEl.style.width = `${pct}%`;
+      barEl.classList.toggle("bg-rose-400", pct < 25);
+      barEl.classList.toggle("bg-emerald-400", pct >= 25);
+    }
+
+    function setText(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = value ?? "—";
+    }
+
+    function formatCurrency(amount, currency = "USD") {
+      if (amount == null || Number.isNaN(amount)) return "—";
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        maximumFractionDigits: 2,
+      }).format(amount);
+    }
+
+    function formatNumber(value) {
+      if (value == null || Number.isNaN(value)) return "0";
+      return new Intl.NumberFormat("en-US").format(value);
+    }
+
+    function formatDateLabel(date) {
+      const d = new Date(date);
+      if (Number.isNaN(d.valueOf())) return "—";
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    }
+
+    // ---- Tabs & helpers ----
+    function reloadActiveTab() {
+      const active = document.querySelector(".tab-button.bg-slate-800");
+      if (!active) {
+        setActiveTab("overview");
+        return;
+      }
+      const tabName = active.dataset.tab;
+      const perms = getRolePermissions();
+      if (!perms.allowedTabs.includes(tabName)) {
+        setActiveTab("overview");
+        return;
+      }
+      if (tabName === "overview") loadOverview();
+      if (tabName === "policies") loadPolicies();
+      if (tabName === "agents") loadAgents();
+      if (tabName === "billing") loadBilling();
+      if (tabName === "network") loadNetwork();
+    }
+
+    function setActiveTab(tabName) {
+      const perms = getRolePermissions();
+      if (!perms.allowedTabs.includes(tabName)) {
+        tabName = "overview";
+      }
+
+      document.querySelectorAll(".tab-panel").forEach(el => {
+        el.classList.toggle("hidden", el.id !== `tab-${tabName}`);
+      });
+      document.querySelectorAll(".tab-button").forEach(btn => {
+        const active = btn.dataset.tab === tabName;
+        btn.className = active
+          ? "tab-button px-3 py-1 rounded-full bg-slate-800 text-slate-50"
+          : "tab-button px-3 py-1 rounded-full text-slate-400 hover:bg-slate-800/60";
+      });
+
+      if (tabName === "overview") loadOverview();
+      if (tabName === "policies") loadPolicies();
+      if (tabName === "agents") loadAgents();
+      if (tabName === "billing") loadBilling();
+      if (tabName === "network") loadNetwork();
+    }
+
+    function escapeHtml(str) {
+      if (str == null) return "";
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      // initialize header from stored config
+      updateHeaderFromConfig();
+      applyRbacState();
+
+      document.querySelectorAll(".tab-button").forEach(btn => {
+        btn.addEventListener("click", () => {
+          if (btn.disabled) return;
+          setActiveTab(btn.dataset.tab);
+        });
+      });
+      setActiveTab("overview");
+    });
+  </script>
+</body>
+</html>

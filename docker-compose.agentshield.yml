@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # AgentShield Enclave Mock Service
+  agentshield-enclave:
+    build:
+      context: .
+      dockerfile: Dockerfile.agentshield
+    container_name: agentshield-enclave
+    ports:
+      - "8443:8443"
+    environment:
+      - AGENTSHIELD_PORT=8443
+      - AGENTSHIELD_VSOCK_PORT=5555
+      - AGENTSHIELD_VSOCK_CID=3
+    volumes:
+      - ./agentshield_policy.json:/app/policy.json:ro
+    networks:
+      - vigil-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Vigil Enhanced Server with TEE
+  vigil-tee:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: vigil-tee
+    ports:
+      - "8000:8000"
+    environment:
+      - VIGIL_TEE_ENABLED=true
+      - VIGIL_TEE_TYPE=none
+      - VIGIL_AGENTSHIELD_URL=http://agentshield-enclave:8443
+      - VIGIL_AGENTSHIELD_TRANSPORT=http
+      - AGENTSHIELD_BASE_URL=http://agentshield-enclave:8443
+      - ENABLE_JWKS_VERIFICATION=true
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./api_keys.json:/app/api_keys.json:ro
+      - ./logs:/app/logs
+    networks:
+      - vigil-network
+    depends_on:
+      agentshield-enclave:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  vigil-network:
+    driver: bridge

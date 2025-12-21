@@ -1,0 +1,293 @@
+# Vigil Alert Rules for AgentShield v2.0
+# Configures alerting for semantic threats, data governance, and supply chain issues
+
+# ============================================================================
+# SEMANTIC THREAT ALERTS
+# ============================================================================
+
+semantic_threats:
+  - name: "High Confidence Jailbreak"
+    description: "Jailbreak attempt detected with very high confidence"
+    condition: "classifier_scores.jailbreak > 0.9"
+    severity: CRITICAL
+    actions:
+      - email
+      - slack
+      - pagerduty
+    throttle:
+      period: 5m
+      max_alerts: 3
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/jailbreak-response"
+      sla_response_time: "15m"
+  
+  - name: "Exfiltration Attempt"
+    description: "Potential data exfiltration detected"
+    condition: "classifier_labels CONTAINS 'exfiltration'"
+    severity: HIGH
+    actions:
+      - email
+      - slack
+    throttle:
+      period: 10m
+      max_alerts: 5
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/exfiltration-response"
+      sla_response_time: "30m"
+  
+  - name: "Coercion Attempt"
+    description: "Agent coercion attempt detected"
+    condition: "classifier_labels CONTAINS 'coercion' AND classifier_scores.coercion > 0.85"
+    severity: HIGH
+    actions:
+      - email
+      - slack
+    throttle:
+      period: 15m
+      max_alerts: 5
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/coercion-response"
+  
+  - name: "Repeated Jailbreak from Same Agent"
+    description: "Multiple jailbreak attempts from the same agent"
+    condition: "COUNT(agent_id WHERE classifier_labels CONTAINS 'jailbreak') > 3 IN 1h"
+    severity: CRITICAL
+    actions:
+      - email
+      - slack
+      - pagerduty
+    auto_remediation:
+      - quarantine_agent
+      - notify_security_team
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/persistent-attacker"
+
+# ============================================================================
+# SCANNER PIPELINE ALERTS
+# ============================================================================
+
+scanner_alerts:
+  - name: "High Block Rate"
+    description: "Unusually high block rate detected"
+    condition: "scanner_verdict = 'BLOCK' COUNT > 50 IN 1h"
+    severity: MEDIUM
+    actions:
+      - email
+      - slack
+    metadata:
+      investigation: "Check for attack patterns or misconfiguration"
+  
+  - name: "Scanner Module Failures"
+    description: "Multiple scanner modules failing"
+    condition: "LENGTH(scanner_modules_failed) > 2"
+    severity: HIGH
+    actions:
+      - email
+      - pagerduty
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/scanner-degradation"
+
+# ============================================================================
+# DATA GOVERNANCE ALERTS
+# ============================================================================
+
+data_governance:
+  - name: "Data Poisoning Detected"
+    description: "Data poisoning detected in dataset"
+    condition: "poisoning_detected = true"
+    severity: CRITICAL
+    actions:
+      - email
+      - slack
+      - pagerduty
+    auto_remediation:
+      - quarantine_dataset
+      - halt_training
+      - notify_ml_team
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/data-poisoning"
+      sla_response_time: "5m"
+      compliance: "SOC2, ISO27001"
+  
+  - name: "Differential Privacy Violation"
+    description: "DP enforcement failed or epsilon exceeded"
+    condition: "dp_enforced = false AND privacy_required = true"
+    severity: HIGH
+    actions:
+      - email
+      - slack
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/dp-violation"
+      compliance: "GDPR, CCPA"
+  
+  - name: "Watermark Verification Failed"
+    description: "Model watermark verification failed"
+    condition: "watermark_verified = false"
+    severity: HIGH
+    actions:
+      - email
+      - slack
+    auto_remediation:
+      - flag_model
+      - require_reverification
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/watermark-failure"
+  
+  - name: "Multiple Poisoning Attempts"
+    description: "Multiple poisoning attempts from same source"
+    condition: "COUNT(poisoning_detected = true GROUP BY dataset_id) > 2 IN 24h"
+    severity: CRITICAL
+    actions:
+      - email
+      - pagerduty
+    auto_remediation:
+      - quarantine_all_related_datasets
+      - initiate_forensics
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/coordinated-poisoning"
+
+# ============================================================================
+# SUPPLY CHAIN ALERTS
+# ============================================================================
+
+supply_chain:
+  - name: "SBOM Verification Failed"
+    description: "Component SBOM signature verification failed"
+    condition: "sbom_verified = false"
+    severity: HIGH
+    actions:
+      - email
+      - slack
+    auto_remediation:
+      - disable_component
+      - revert_to_last_known_good
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/sbom-failure"
+      sla_response_time: "1h"
+      compliance: "SOC2, SLSA Level 3"
+  
+  - name: "Unknown Component Hash"
+    description: "Component hash not found in approved registry"
+    condition: "component_hash NOT IN approved_registry"
+    severity: CRITICAL
+    actions:
+      - email
+      - pagerduty
+    auto_remediation:
+      - quarantine_component
+      - halt_deployment
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/unauthorized-component"
+  
+  - name: "Outdated Component Detected"
+    description: "Component version behind security patch level"
+    condition: "component_version < minimum_secure_version"
+    severity: MEDIUM
+    actions:
+      - email
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/component-update"
+  
+  - name: "Multiple SBOM Failures"
+    description: "Multiple SBOM verification failures"
+    condition: "COUNT(sbom_verified = false) > 5 IN 1h"
+    severity: CRITICAL
+    actions:
+      - email
+      - pagerduty
+    auto_remediation:
+      - initiate_incident_response
+      - freeze_deployments
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/supply-chain-compromise"
+
+# ============================================================================
+# COMPOSITE/BEHAVIORAL ALERTS
+# ============================================================================
+
+behavioral:
+  - name: "Multi-Vector Attack Pattern"
+    description: "Multiple attack types from same agent"
+    condition: |
+      agent_id HAS (
+        classifier_labels CONTAINS 'jailbreak' AND
+        classifier_labels CONTAINS 'exfiltration'
+      ) IN 1h
+    severity: CRITICAL
+    actions:
+      - email
+      - slack
+      - pagerduty
+    auto_remediation:
+      - quarantine_agent
+      - escalate_to_security_team
+    metadata:
+      runbook: "https://docs.vigil.ai/runbooks/sophisticated-attack"
+  
+  - name: "Anomalous Activity Spike"
+    description: "Sudden spike in blocked requests"
+    condition: "scanner_verdict = 'BLOCK' COUNT > (24h_avg * 3) IN 1h"
+    severity: HIGH
+    actions:
+      - email
+      - slack
+    metadata:
+      investigation: "Possible DDoS or coordinated attack"
+
+# ============================================================================
+# ALERT ROUTING CONFIGURATION
+# ============================================================================
+
+routing:
+  email:
+    critical: "security-oncall@company.com"
+    high: "security-team@company.com"
+    medium: "ml-ops@company.com"
+    low: "monitoring@company.com"
+  
+  slack:
+    critical: "#security-alerts"
+    high: "#security-monitoring"
+    medium: "#ml-ops"
+  
+  pagerduty:
+    critical: "security-oncall-primary"
+    high: "security-oncall-secondary"
+
+# ============================================================================
+# ALERT SETTINGS
+# ============================================================================
+
+settings:
+  # Global throttling to prevent alert storms
+  global_throttle:
+    enabled: true
+    max_alerts_per_minute: 10
+    burst_threshold: 20
+  
+  # Auto-acknowledgement for known patterns
+  auto_ack:
+    enabled: true
+    conditions:
+      - "scanner_verdict = 'WARN' AND scanner_confidence < 0.6"
+  
+  # Alert aggregation
+  aggregation:
+    enabled: true
+    window: 5m
+    group_by:
+      - alert_type
+      - agent_id
+  
+  # Business hours
+  business_hours:
+    timezone: "America/New_York"
+    weekdays: "Mon-Fri"
+    hours: "09:00-17:00"
+    escalation_after_hours: true
+  
+  # Alert retention
+  retention:
+    resolved_alerts: 90d
+    unresolved_alerts: 365d
+    archive_to: "s3://vigil-alerts-archive"

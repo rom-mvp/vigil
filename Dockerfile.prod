@@ -1,0 +1,113 @@
+# Vigil Production Dockerfile with TEE Support
+# Includes ONNX Runtime GPU support for Vector Threat Scanning and TEE attestation
+
+# Stage 1: Base image with CUDA for GPU acceleration
+FROM nvidia/cuda:12.0.0-runtime-ubuntu22.04 AS base
+
+# Install system dependencies including TEE support
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    python3-dev \
+    build-essential \
+    curl \
+    wget \
+    git \
+    redis-tools \
+    ca-certificates \
+    libgomp1 \
+    cpuid \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Stage 2: Dependencies installation
+FROM base AS dependencies
+
+# Copy requirements first (for Docker layer caching)
+COPY requirements.txt .
+
+# Install Python dependencies including TEE and crypto support
+# Note: onnxruntime-gpu requires CUDA, included in base image
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir -r requirements.txt && \
+    pip3 install --no-cache-dir pycryptodome
+
+# Download spaCy model (for PII engine)
+RUN python3 -m spacy download en_core_web_sm
+
+# Stage 3: Application setup
+FROM dependencies AS application
+
+# Copy application source including TEE modules
+COPY src/ /app/src/
+COPY vigil_enhanced_server.py /app/vigil_enhanced_server.py
+COPY dashboard.html /app/dashboard.html
+COPY dashboard_server.py /app/dashboard_server.py
+COPY local_server.py /app/local_server.py
+
+# Create directories for models, data, and TEE measurements
+RUN mkdir -p /app/models /app/data /app/logs /tmp
+
+# Copy threat vectors database (if exists)
+COPY data/threat_vectors.jsonl /app/data/threat_vectors.jsonl 2>/dev/null || echo "No threat_vectors.jsonl found, will use defaults"
+
+# Stage 4: Production runtime
+FROM application AS production
+
+# Set environment variables including TEE configuration
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    VIGIL_ENVIRONMENT=production \
+    VECTOR_MODEL_PATH=/app/models/all-MiniLM-L6-v2.onnx \
+    VIGIL_TEE_ENABLED=false \
+    VIGIL_TEE_TYPE=auto \
+    VIGIL_AGENTSHIELD_TRANSPORT=http \
+    VECTOR_DB_PATH=/app/data/threat_vectors.jsonl \
+    APPEND_LOG_PATH=/app/logs/append_only.jsonl
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose Vigil gateway port
+EXPOSE 8000
+
+# Optional: Expose dashboard port
+EXPOSE 8080
+
+# Create non-root user for security
+RUN useradd -m -u 1000 vigil && \
+    chown -R vigil:vigil /app
+
+USER vigil
+
+# Run Vigil Enhanced Server with TEE support
+CMD ["python3", "vigil_enhanced_server.py"]
+
+# Alternative: Run with Gunicorn for production (uncomment if using)
+# CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--worker-class", "gevent", "--timeout", "120", "src.vigil.local_server:app"]
+
+# GPU Configuration Notes:
+# -----------------------
+# To run this container with GPU support:
+# 
+#   docker run --gpus all \
+#     -p 8000:8000 \
+#     -e REDIS_URL=redis://redis:6379/0 \
+#     -e AGENTSHIELD_URL=http://agentshield:9000 \
+#     -e VIGIL_FAIL_MODE=closed \
+#     -v /path/to/models:/app/models \
+#     -v /path/to/logs:/app/logs \
+#     vigil:latest
+#
+# GPU Memory Requirements:
+# - Vector scanning: ~500MB VRAM (for embedding model)
+# - Recommended: NVIDIA T4 (16GB) or better
+# - AWS Instance: g4dn.xlarge or g5.xlarge
+#
+# CPU-Only Fallback:
+# - Container runs without --gpus flag
+# - ONNX Runtime automatically falls back to CPUExecutionProvider
+# - Latency increases from ~3ms to ~30ms for vector scans

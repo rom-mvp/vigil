@@ -1,0 +1,217 @@
+# Vigil Gateway - Kubernetes Deployment
+# Recommended for production use with 3+ replicas
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-system
+  labels:
+    name: vigil-system
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-config
+  namespace: vigil-system
+data:
+  AGENTSHIELD_URL: "http://agentshield:9000"
+  AGENTSHIELD_JWKS_URL: "http://agentshield:9000/v1/keys/jwks"
+  AGENTSHIELD_REQUIRE_SIGNED: "true"
+  AGENTSHIELD_TIMEOUT_MS: "3000"
+  MAX_RISK_SCORE: "0.30"
+  DISALLOWED_REASONS: "credential-exfil,tenant-boundary,privilege-escalation"
+  DECISION_MAX_AGE_SECONDS: "300"
+  RATE_LIMIT_RPS: "5"
+  LOG_LEVEL: "INFO"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+  labels:
+    app: vigil-gateway
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: vigil-gateway
+  template:
+    metadata:
+      labels:
+        app: vigil-gateway
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: vigil-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: vigil
+        image: vigil:latest  # Replace with your registry
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: vigil-config
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 2
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - vigil-gateway
+              topologyKey: kubernetes.io/hostname
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+  labels:
+    app: vigil-gateway
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: vigil-gateway
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+
+---
+# Horizontal Pod Autoscaler - Scales based on CPU/memory
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vigil-gateway
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# PodDisruptionBudget - Ensure minimum availability during disruptions
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: vigil-gateway
+
+---
+# Ingress (Optional - for external access)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vigil-gateway
+  namespace: vigil-system
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - vigil.yourdomain.com
+    secretName: vigil-tls
+  rules:
+  - host: vigil.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vigil-gateway
+            port:
+              number: 8000

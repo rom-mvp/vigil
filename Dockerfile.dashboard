@@ -1,0 +1,50 @@
+# Stage 1: Build React Frontend
+FROM node:18-alpine as builder
+
+WORKDIR /app
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+
+COPY frontend/ .
+RUN npm run build
+
+# Stage 2: Python Dashboard Server
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 vigil && \
+    mkdir -p /app /app/logs && \
+    chown -R vigil:vigil /app
+
+WORKDIR /app
+
+# Install dependencies (re-using main requirements for simplicity, or just Flask+deps)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy backend code
+COPY --chown=vigil:vigil src/vigil/dashboard_server.py .
+COPY --chown=vigil:vigil src/vigil/merkle_log_store.py .
+
+# Copy frontend build artifacts from Stage 1
+# We put them in 'static_build' so Flask can serve them
+COPY --from=builder --chown=vigil:vigil /app/dist ./static_build
+
+# Switch to non-root user
+USER vigil
+
+# Expose dashboard port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Run the dashboard server
+CMD ["python", "dashboard_server.py"]

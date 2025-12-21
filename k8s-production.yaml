@@ -1,0 +1,491 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-system
+  labels:
+    app.kubernetes.io/name: vigil
+    app.kubernetes.io/component: security
+---
+# ConfigMap for Vigil Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vigil-config
+  namespace: vigil-system
+data:
+  VIGIL_TEE_ENABLED: "true"
+  VIGIL_TEE_TYPE: "auto"  # auto, sgx, sev, tdx, azure, none
+  VIGIL_AGENTSHIELD_TRANSPORT: "http"
+  VIGIL_AGENTSHIELD_URL: "http://agentshield-enclave:8443"
+  ENABLE_JWKS_VERIFICATION: "true"
+  LOG_LEVEL: "INFO"
+  VIGIL_CACHE_TTL: "3600"
+  VIGIL_QUOTE_CACHE_TTL: "3600"
+---
+# ConfigMap for AgentShield Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentshield-config
+  namespace: vigil-system
+data:
+  AGENTSHIELD_PORT: "8443"
+  AGENTSHIELD_VSOCK_PORT: "5555"
+  AGENTSHIELD_VSOCK_CID: "3"
+---
+# Secret for API Keys
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vigil-secrets
+  namespace: vigil-system
+type: Opaque
+data:
+  # Base64 encoded api_keys.json
+  # Create with: kubectl create secret generic vigil-secrets --from-file=api_keys.json=./api_keys.json -n vigil-system
+  api_keys.json: ""
+---
+# Secret for AgentShield Measurement Policy
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agentshield-secrets
+  namespace: vigil-system
+type: Opaque
+data:
+  # Base64 encoded agentshield_policy.json
+  # Create with: kubectl create secret generic agentshield-secrets --from-file=policy.json=./agentshield_policy.json -n vigil-system
+  policy.json: ""
+---
+# PersistentVolumeClaim for Logs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vigil-logs-pvc
+  namespace: vigil-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+---
+# AgentShield Enclave Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentshield-enclave
+  namespace: vigil-system
+  labels:
+    app: agentshield-enclave
+    component: tee-verifier
+spec:
+  replicas: 2  # High availability
+  selector:
+    matchLabels:
+      app: agentshield-enclave
+  template:
+    metadata:
+      labels:
+        app: agentshield-enclave
+        component: tee-verifier
+    spec:
+      # Node affinity for TEE-capable nodes
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node.kubernetes.io/tee
+                    operator: In
+                    values:
+                      - sgx
+                      - sev
+                      - tdx
+      containers:
+        - name: agentshield
+          image: vigil/agentshield-enclave:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8443
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: agentshield-config
+          volumeMounts:
+            - name: policy
+              mountPath: /app/policy.json
+              subPath: policy.json
+              readOnly: true
+            # Mount TEE device nodes (platform-specific)
+            - name: sgx-enclave
+              mountPath: /dev/sgx_enclave
+              readOnly: false
+            - name: sgx-provision
+              mountPath: /dev/sgx_provision
+              readOnly: false
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            capabilities:
+              add:
+                - SYS_RAWIO  # For TEE device access
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: policy
+          secret:
+            secretName: agentshield-secrets
+            items:
+              - key: policy.json
+                path: policy.json
+        # TEE device volumes (platform-specific)
+        - name: sgx-enclave
+          hostPath:
+            path: /dev/sgx_enclave
+            type: CharDevice
+        - name: sgx-provision
+          hostPath:
+            path: /dev/sgx_provision
+            type: CharDevice
+---
+# AgentShield Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentshield-enclave
+  namespace: vigil-system
+  labels:
+    app: agentshield-enclave
+spec:
+  type: ClusterIP
+  selector:
+    app: agentshield-enclave
+  ports:
+    - name: http
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+---
+# Vigil TEE Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vigil-tee-gateway
+  namespace: vigil-system
+  labels:
+    app: vigil-tee-gateway
+    component: api-gateway
+spec:
+  replicas: 3  # Horizontal scaling
+  selector:
+    matchLabels:
+      app: vigil-tee-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: vigil-tee-gateway
+        component: api-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Node affinity for TEE-capable nodes
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node.kubernetes.io/tee
+                    operator: In
+                    values:
+                      - sgx
+                      - sev
+                      - tdx
+                      - azure-cc
+        # Pod anti-affinity for high availability
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - vigil-tee-gateway
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: vigil
+          image: vigil/vigil-tee:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: vigil-config
+          volumeMounts:
+            - name: api-keys
+              mountPath: /app/api_keys.json
+              subPath: api_keys.json
+              readOnly: true
+            - name: logs
+              mountPath: /app/logs
+            # Mount TEE device nodes
+            - name: sgx-enclave
+              mountPath: /dev/sgx_enclave
+              readOnly: false
+            - name: sgx-provision
+              mountPath: /dev/sgx_provision
+              readOnly: false
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "4000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            capabilities:
+              add:
+                - SYS_RAWIO  # For TEE device access
+              drop:
+                - ALL
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: api-keys
+          secret:
+            secretName: vigil-secrets
+            items:
+              - key: api_keys.json
+                path: api_keys.json
+        - name: logs
+          persistentVolumeClaim:
+            claimName: vigil-logs-pvc
+        - name: sgx-enclave
+          hostPath:
+            path: /dev/sgx_enclave
+            type: CharDevice
+        - name: sgx-provision
+          hostPath:
+            path: /dev/sgx_provision
+            type: CharDevice
+---
+# Vigil Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: vigil-tee-gateway
+  namespace: vigil-system
+  labels:
+    app: vigil-tee-gateway
+spec:
+  type: LoadBalancer
+  selector:
+    app: vigil-tee-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: 8000
+      protocol: TCP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+---
+# HorizontalPodAutoscaler for Vigil
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vigil-tee-gateway-hpa
+  namespace: vigil-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vigil-tee-gateway
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+---
+# PodDisruptionBudget for High Availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vigil-tee-gateway-pdb
+  namespace: vigil-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: vigil-tee-gateway
+---
+# NetworkPolicy - Isolate AgentShield
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentshield-network-policy
+  namespace: vigil-system
+spec:
+  podSelector:
+    matchLabels:
+      app: agentshield-enclave
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only allow traffic from Vigil gateway
+    - from:
+        - podSelector:
+            matchLabels:
+              app: vigil-tee-gateway
+      ports:
+        - protocol: TCP
+          port: 8443
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow external attestation services (Intel IAS, Azure Attestation, etc.)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# NetworkPolicy - Vigil Gateway
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vigil-gateway-network-policy
+  namespace: vigil-system
+spec:
+  podSelector:
+    matchLabels:
+      app: vigil-tee-gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from anywhere (public API)
+    - ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow AgentShield communication
+    - to:
+        - podSelector:
+            matchLabels:
+              app: agentshield-enclave
+      ports:
+        - protocol: TCP
+          port: 8443
+    # Allow LLM provider APIs (OpenAI, Anthropic, etc.)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
