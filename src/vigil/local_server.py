@@ -13,6 +13,7 @@ import unicodedata
 import re
 import string
 import redis
+import asyncio
 
 from .firewall_engine import FirewallEngine
 from .pii_engine import PIIEngine
@@ -22,6 +23,8 @@ from .log_sync_worker import LogSyncWorker
 from .vector_engine import VectorEngine
 from .api_key_auth import APIKeyAuth
 from .token_meter import TokenMeter
+from .agentic_decision_engine import AgenticDecisionEngine
+from .feedback_loop_manager import FeedbackLoopManager
 
 app = Flask(__name__)
 firewall = FirewallEngine()
@@ -33,6 +36,10 @@ agentshield = AgentShieldClient()
 # SaaS Components
 api_key_auth = APIKeyAuth()  # API key validation and tenant resolution
 token_meter = TokenMeter()  # Token counting and billing
+
+# 🤖 Agentic Components (NEW)
+agentic_engine = AgenticDecisionEngine(firewall, vector_engine, agentshield)  # Multi-strategy decision engine
+feedback_manager = FeedbackLoopManager()  # Continuous learning system
 
 def _get_pii_engine():
     global pii_engine
@@ -734,6 +741,45 @@ def transparent_proxy():
         # Note: timestamp_ms, ttl_ms, and input_hash are auto-added by AgentShieldClient
     }
     
+    # 🤖 USE AGENTIC DECISION ENGINE (parallel multi-strategy evaluation)
+    use_agentic = os.environ.get('VIGIL_USE_AGENTIC', 'true').lower() == 'true'
+    t_agentic_start = time.time()
+    agentic_decision = None
+    
+    if use_agentic:
+        try:
+            # Run agentic engine with parallel strategy evaluation
+            # This runs 5 strategies concurrently (vector, rules, behavioral, policy, contextual)
+            # instead of sequentially
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            agentic_decision = loop.run_until_complete(
+                agentic_engine.evaluate_async(
+                    content=" ".join([content for content in normalized_contents if content]),
+                    context={
+                        "request_id": request_id,
+                        "ip_address": request.remote_addr,
+                        "user_agent": request.headers.get('User-Agent', ''),
+                        "frequency_spike": False,  # Would be populated from rate limiter
+                        "is_repeat_attack": False  # Would be populated from threat intel
+                    },
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    decision_request=enforcement_req
+                )
+            )
+            loop.close()
+            
+            timings['t_agentic_ms'] = round((time.time() - t_agentic_start) * 1000, 2)
+            
+            # Log agentic decision distribution
+            print(f"[AGENTIC] Decision: {agentic_decision.decision}, Confidence: {agentic_decision.confidence:.2%}, Risk: {agentic_decision.risk_score:.2f}")
+            
+        except Exception as e:
+            print(f"Warning: Agentic engine failed, falling back to legacy: {e}")
+            agentic_decision = None
+    
     t_agentshield_start = time.time()
     decision = None
     enforcement_error = None
@@ -741,17 +787,32 @@ def transparent_proxy():
     agentshield_decision = None  # Priority 2: Store original decision before override
     
     try:
-        # Preferred: obtain signed decision via /decision (deterministic, lightweight)
-        decision_envelope = agentshield.get_decision({
-            "tenant_id": tenant_id,
-            "agent_id": agent_id,
-            "policy_id": policy_id,
-            "policy_version": policy_version,
-            "request_id": request_id,
-            "messages": messages,
-            # Include vector scan results for AgentShield decision context
-            "scan_results": enforcement_req["scan_results"]
-        })
+        # Use agentic decision if available and confident
+        if agentic_decision and agentic_decision.confidence > 0.70:
+            # Map agentic decision to enforcement format
+            decision_envelope = {
+                "decision": agentic_decision.decision,
+                "risk_score": agentic_decision.risk_score,
+                "reasons": [f"{sr.reasoning}" for sr in agentic_decision.strategy_results],
+                "decision_hash": None,
+                "audit_event_id": agentic_decision.audit_trace_id,
+                "key_id": None,
+                "confidence_score": agentic_decision.confidence,
+                "uncertainty": agentic_decision.uncertainty,
+                "strategy_breakdown": {sr.strategy.value: sr.to_dict() for sr in agentic_decision.strategy_results}
+            }
+        else:
+            # Fallback: obtain signed decision via /decision (legacy deterministic path)
+            decision_envelope = agentshield.get_decision({
+                "tenant_id": tenant_id,
+                "agent_id": agent_id,
+                "policy_id": policy_id,
+                "policy_version": policy_version,
+                "request_id": request_id,
+                "messages": messages,
+                # Include vector scan results for AgentShield decision context
+                "scan_results": enforcement_req["scan_results"]
+            })
         timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
         decision = {
             "action": decision_envelope.get("decision"),
