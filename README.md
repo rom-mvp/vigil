@@ -107,21 +107,7 @@ LLM (OpenAI, Anthropic, etc.)
 
 ## 📊 Security Performance
 
-Latest audit results (December 2025):
-
-| Attack Category | Detection Rate | Avg Latency | Status |
-|---|---|---|---|
-| Direct Injection | 100% (4/4) | 15.27ms | ✅ |
-| SQL Injection | 100% (2/2) | 11.69ms | ✅ |
-| XSS Injection | 100% (2/2) | 11.01ms | ✅ |
-| DAN Jailbreaks | 100% (3/3) | 16.37ms | ✅ |
-| JSON Smuggling | 100% (2/2) | 13.42ms | ✅ |
-| PII Leaks | 100% (4/4) | 29.71ms | ✅ |
-| Command Injection | 100% (2/2) | 14.22ms | ✅ |
-| Path Traversal | 100% (2/2) | 14.62ms | ✅ |
-| **Overall** | **100% (35/35)** | **17.83ms** | **A+** |
-
-**False Positive Rate:** 0% (0/3 benign queries blocked)
+**100% Detection Rate** (35/35 attacks blocked) • **17.83ms avg latency** • **0% false positives**
 
 ---
 
@@ -378,7 +364,7 @@ Vigil is designed for organizations that need:
 
 **Need help with production deployment? Have questions about enterprise features?**
 
-📧 **Email:** [contact@romulusmvp.com](mailto:contact@romulusmvp.com)
+📧 **Email:** [suladesada@gmail.com](mailto:suladesada@gmail.com)
 
 We offer:
 - Enterprise support contracts
@@ -410,6 +396,6 @@ Built with 🦀 (Spiritually) and 🐍 (Actually).
 
 **⭐ Star us on GitHub if Vigil protects your LLM applications!**
 
-[🔭 GitHub](https://github.com/rom-mvp/vigil) • [📧 Contact](mailto:contact@romulusmvp.com) • [📚 Docs](#-documentation)
+[🔭 GitHub](https://github.com/rom-mvp/vigil) • [📧 Contact](mailto:suladesada@gmail.com) • [📚 Docs](#-documentation)
 
 </div>
