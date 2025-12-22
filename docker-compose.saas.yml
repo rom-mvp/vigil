@@ -1,0 +1,113 @@
+version: '3.8'
+
+services:
+  # ═══════════════════════════════════════════════════════════
+  # 1. VIGIL GATEWAY - The "Dumb" Forwarder (Public-Facing)
+  # ═══════════════════════════════════════════════════════════
+  vigil-gateway:
+    build: 
+      context: ./services/vigil-gateway
+      dockerfile: Dockerfile
+    container_name: vigil-gateway
+    ports:
+      - "8000:8000"  # Public API
+    environment:
+      # Environment
+      - VIGIL_ENV=docker
+      - VIGIL_STRICT_MODE=true
+      
+      # Enclave Connection (Docker DNS resolves 'agentshield-enclave')
+      - ENCLAVE_URL=http://agentshield-enclave:5000
+      
+      # JWT Auth (Mock for local dev)
+      - AUTH_JWKS_URL=https://auth.vigil.ai/.well-known/jwks.json
+      - AUTH_ISSUER=https://auth.vigil.ai
+      - AUTH_AUDIENCE=vigil-api
+      
+      # Logging
+      - LOG_LEVEL=info
+    
+    depends_on:
+      - agentshield-enclave
+      - redis
+    
+    networks:
+      - secure-mesh
+    
+    volumes:
+      # Mount shared schemas so they're accessible
+      - ./shared:/app/shared:ro
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ═══════════════════════════════════════════════════════════
+  # 2. AGENTSHIELD ENCLAVE - The "Smart" Vault (Backend Only)
+  # ═══════════════════════════════════════════════════════════
+  agentshield-enclave:
+    build: 
+      context: ./services/agentshield-enclave
+      dockerfile: Dockerfile.simulation  # For local dev
+    container_name: agentshield-enclave
+    environment:
+      - APP_ENV=dev
+      - ENCLAVE_PRIVATE_KEY=mock_key_for_dev
+      
+      # Connect to Redis for policy cache
+      - REDIS_URL=redis://redis:6379/1
+      
+      # Feature flags
+      - ENABLE_TEE_ATTESTATION=false  # Mock mode for local dev
+      - ENABLE_INVISIBLE_WALLET=true
+    
+    # NO PORTS EXPOSED TO HOST!
+    # Only accessible by Vigil inside secure-mesh network
+    expose:
+      - "5000"
+    
+    networks:
+      - secure-mesh
+    
+    volumes:
+      # Mount shared schemas
+      - ./shared:/app/shared:ro
+    
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ═══════════════════════════════════════════════════════════
+  # 3. REDIS - Policy Cache & Rate Limiting
+  # ═══════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: vigil-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - secure-mesh
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+
+# ═══════════════════════════════════════════════════════════
+# Networks: Isolated mesh for service-to-service communication
+# ═══════════════════════════════════════════════════════════
+networks:
+  secure-mesh:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# ═══════════════════════════════════════════════════════════
+# Volumes: Persistent storage
+# ═══════════════════════════════════════════════════════════
+volumes:
+  redis-data:
+    driver: local

@@ -1,0 +1,57 @@
+# ═══════════════════════════════════════════════════════════════
+# Dockerfile.nitro - Secure AWS Nitro Enclave Build
+# Zero-trust, distroless image with no shell access
+# ═══════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════
+# Stage 1: Builder (Install dependencies in Python environment)
+# ═══════════════════════════════════════════════════════════════
+FROM python:3.11-slim as builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir --target=/install -r requirements.txt
+
+# Copy shared schemas (The Contract)
+COPY ../../../shared /shared
+
+# ═══════════════════════════════════════════════════════════════
+# Stage 2: Distroless Runtime (Minimal Attack Surface)
+# NO SHELL, NO PACKAGE MANAGER, NO ROOT ACCESS
+# ═══════════════════════════════════════════════════════════════
+FROM gcr.io/distroless/python3-debian11:nonroot
+
+# Copy Python dependencies from builder
+COPY --from=builder /install /usr/local/lib/python3.11/site-packages
+
+# Copy application code
+COPY src /app
+COPY --from=builder /shared /app/shared
+
+WORKDIR /app
+
+# Set Python path
+ENV PYTHONPATH=/usr/local/lib/python3.11/site-packages:/app
+
+# Run as non-root user (distroless provides 'nonroot' user)
+USER nonroot
+
+# Expose port (internal to enclave only)
+EXPOSE 5000
+
+# ENTRYPOINT is strict - no bash, no sh, no exec
+ENTRYPOINT ["python3", "/app/main.py"]
+
+# Build metadata for attestation
+LABEL maintainer="vigil-security"
+LABEL description="AgentShield Enclave - Hardware-Isolated Threat Detection"
+LABEL version="1.0.0"
+LABEL build.reproducible="true"
