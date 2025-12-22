@@ -9,6 +9,7 @@ jailbreaks, injection templates) stored in VRAM.
 """
 
 import os
+import sys
 import numpy as np
 import logging
 from typing import Dict, List, Any
@@ -38,6 +39,7 @@ class VectorScanner:
             vector_db_path: Path to threat vector database (default: data/threat_vectors.jsonl)
             threshold: Cosine similarity threshold for threat detection (0.85)
         """
+        self.strict_mode = os.getenv('VIGIL_STRICT_MODE', 'false').lower() == 'true'
         self.model_path = model_path or os.environ.get('VECTOR_MODEL_PATH', 'models/all-MiniLM-L6-v2.onnx')
         self.vector_db_path = vector_db_path or os.environ.get('VECTOR_DB_PATH', 'data/threat_vectors.jsonl')
         self.threshold = threshold
@@ -69,10 +71,33 @@ class VectorScanner:
                 self._load_threat_db()
                 
                 self._initialized = True
-                provider = self.session.get_providers()[0] if self.session else "None"
+                provider = self.session.get_providers()[0] if self.session else "MockVectorMode"
                 logger.info(f"VectorScanner initialized on {provider} with {len(self.threat_labels)} threat patterns")
+                
             except Exception as e:
-                logger.error(f"VectorScanner initialization failed: {e}")
+                error_msg = f"VectorScanner initialization failed: {e}"
+                logger.error(error_msg)
+                
+                if self.strict_mode:
+                    print(f"\n{'='*80}")
+                    print(f"❌ VIGIL STRICT MODE: Vector Engine Failed to Initialize")
+                    print(f"{'='*80}")
+                    print(f"Error: {e}")
+                    print(f"Model Path: {self.model_path}")
+                    print(f"\nTo run without vector scanning, set:")
+                    print(f"  export VIGIL_STRICT_MODE=false")
+                    print(f"{'='*80}\n")
+                    sys.exit(1)
+                else:
+                    print(f"\n{'='*80}")
+                    print(f"⚠️  WARNING: Vector Engine Failed - Using Mock Mode")
+                    print(f"{'='*80}")
+                    print(f"Error: {e}")
+                    print(f"Model Path: {self.model_path}")
+                    print(f"Vigil will continue with DEGRADED security (pattern-matching only)")
+                    print(f"Set VIGIL_STRICT_MODE=true to fail-fast in production")
+                    print(f"{'='*80}\n")
+                
                 self._initialized = True  # Mark as initialized to avoid retry loops
     
     def _load_model(self, model_path: str):

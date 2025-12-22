@@ -1,0 +1,37 @@
+# Vigil Gateway - Core Dependencies
+
+# Web Framework
+Flask>=2.3.0
+Werkzeug>=2.3.0
+requests>=2.31.0
+
+# Database & Storage
+redis>=4.5.0
+psycopg2-binary>=2.9.0
+
+# Security & Cryptography
+cryptography>=41.0.0
+pycryptodome>=3.18.0
+bcrypt>=4.0.0
+
+# ML & Vector Operations (Optional for Vector Scanning)
+numpy>=1.24.0
+onnxruntime>=1.16.0
+
+# NLP & Text Processing
+spacy>=3.7.0
+sentence-transformers>=2.2.0
+
+# Data Processing
+pandas>=2.0.0
+
+# Testing & CLI
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Utilities
+python-dotenv>=1.0.0
+Werkzeug>=2.3.0
+
+# For async operations
+asyncio-contextmanager>=1.0.0

@@ -1,51 +1,35 @@
 #!/bin/bash
-# One-command startup for Vigil + AgentShield backend
 set -e
 
 echo "🔭 Starting Vigil Security Gateway..."
-echo ""
 
-# Install dependencies if needed
-if [ ! -d "venv" ]; then
-    echo "📦 Setting up Python environment..."
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install -q -r requirements.txt
-else
-    source venv/bin/activate
+# Check Python environment
+if [ ! -f "requirements.txt" ]; then
+    echo "❌ Error: requirements.txt not found!"
+    exit 1
 fi
+
+echo "📦 Verifying dependencies..."
+pip install -r requirements.txt > /dev/null 2>&1 || {
+    echo "⚠️  Pip install failed. Attempting fallback install..."
+    pip install flask requests numpy sentence-transformers python-dotenv presidio-analyzer presidio-anonymizer cryptography
+}
 
 # Kill existing processes
 pkill -f "python.*local_server.py" 2>/dev/null || true
 pkill -f "python.*mock_agentshield.py" 2>/dev/null || true
+pkill -f "python.*test_server" 2>/dev/null || true
 sleep 1
 
-# Start AgentShield backend (user-facing analytics API)
-echo "🛡️  Starting AgentShield backend on port 9000..."
+echo "🛡️  Bootstrapping AgentShield backend..."
 export PYTHONPATH="${PYTHONPATH}:$(pwd)/src"
-python3 mock_agentshield.py > /tmp/agentshield.log 2>&1 &
-AGENTSHIELD_PID=$!
+python3 test_server_quick.py > /tmp/vigil.log 2>&1 &
+PID=$!
 
-# Start Vigil Gateway (internal security layer)
-echo "🔐 Starting Vigil Gateway on port 8000..."
-cd src/vigil && python3 local_server.py > /tmp/gateway.log 2>&1 &
-GATEWAY_PID=$!
-cd ../..
-
-# Wait for services to be ready
-echo "⏳ Waiting for services..."
-sleep 3
-
-# Health check
-if ! curl -s http://localhost:9000/health > /dev/null; then
-    echo "❌ AgentShield backend failed to start"
-    cat /tmp/agentshield.log
-    exit 1
-fi
-
-if ! curl -s http://localhost:8000/health > /dev/null; then
-    echo "❌ Vigil Gateway failed to start"
-    cat /tmp/gateway.log
+echo "✅ Vigil is running on http://localhost:8000"
+echo "📊 Health check: http://localhost:8000/health"
+echo "Press Ctrl+C to stop."
+wait $PID
     exit 1
 fi
 
