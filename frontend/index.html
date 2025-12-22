@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8" />
     <title>Vigil War Room</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -14,28 +15,39 @@
         function App() {
             const [logs, setLogs] = React.useState([]);
             const [stats, setStats] = React.useState({ blocked: 0, allowed: 0 });
+            const API_URL = "http://localhost:8000/api/attack-logs";
+            const API_KEY = "PUT_YOUR_KEY_HERE"; // replace in production
 
             // Poll the logs every 2 seconds
             React.useEffect(() => {
-                const interval = setInterval(() => {
-                    // In a real app, you'd fetch /v1/logs. For now, we mock the live feed.
-                    // REPLACE THIS with a real fetch to your Python server log endpoint
-                    const mockLog = Math.random() > 0.7 ? {
-                        time: new Date().toLocaleTimeString(),
-                        ip: "192.168.1." + Math.floor(Math.random() * 255),
-                        risk: Math.random() > 0.5 ? "CRITICAL" : "SAFE",
-                        payload: Math.random() > 0.5 ? "DROP TABLE users;" : "Hello world",
-                        action: Math.random() > 0.5 ? "BLOCK" : "ALLOW"
-                    } : null;
-
-                    if (mockLog) {
-                        setLogs(prev => [mockLog, ...prev].slice(0, 10));
-                        setStats(prev => ({
-                            blocked: prev.blocked + (mockLog.action === "BLOCK" ? 1 : 0),
-                            allowed: prev.allowed + (mockLog.action === "ALLOW" ? 1 : 0)
+                const fetchLogs = async () => {
+                    try {
+                        const res = await fetch(API_URL, {
+                            headers: { Authorization: `Bearer ${API_KEY}` }
+                        });
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        const data = await res.json();
+                        const latest = (data.logs || []).slice(-10).reverse();
+                        const normalized = latest.map(log => ({
+                            time: new Date(log.timestamp || Date.now()).toLocaleTimeString(),
+                            ip: log.session_id || "unknown",
+                            payload: log.prompt || "",
+                            action: log.blocked ? "BLOCK" : "ALLOW",
+                            blocked: !!log.blocked
                         }));
+                        setLogs(normalized);
+                        const blockedCount = normalized.filter(l => l.blocked).length;
+                        setStats({
+                            blocked: blockedCount,
+                            allowed: latest.length - blockedCount
+                        });
+                    } catch (err) {
+                        console.warn("Live fetch failed, keeping existing logs", err);
                     }
-                }, 1000);
+                };
+
+                fetchLogs();
+                const interval = setInterval(fetchLogs, 2000);
                 return () => clearInterval(interval);
             }, []);
 

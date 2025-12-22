@@ -64,11 +64,14 @@ except Exception as e:
     print(f"⚠ TEE initialization failed: {e}")
     tee_integration = None
 
-# Connect to Redis for session tracking
+# Connect to Redis for session tracking (safe fallback if unavailable)
+REDIS_HOST = os.getenv("VIGIL_REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("VIGIL_REDIS_PORT", "6379"))
+
 try:
-    redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
     redis_client.ping()
-    print("✓ Connected to Redis")
+    print(f"✓ Connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
 except Exception as e:
     print(f"⚠ Redis not available: {e}")
     redis_client = None
@@ -91,7 +94,11 @@ BAD_CONCEPT_EMBEDDINGS = None
 
 def _init_embedding_model():
     global EMBEDDING_MODEL, BAD_CONCEPT_EMBEDDINGS
+    if os.getenv("VIGIL_ML_ENABLED", "true").lower() == "false":
+        print("⚠ Semantic guardrails model disabled via VIGIL_ML_ENABLED=false")
+        return
     if SentenceTransformer is None or np is None:
+        print("⚠ Semantic guardrails dependencies not available; skipping model load")
         return
     try:
         model_name = os.getenv("VIGIL_EMBED_MODEL", "all-MiniLM-L6-v2")
@@ -883,6 +890,14 @@ def analyze_request(request_data: Dict, session_id: str, agent_profile: Dict[str
 # ============================================================================
 
 attack_logs: List[Dict[str, Any]] = []
+
+# Allow cross-origin calls for the War Room dashboard
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    return response
 
 def apply_timing_normalization(response, request_start_ns: int, status_code: int):
     elapsed_ns = time.perf_counter_ns() - request_start_ns
