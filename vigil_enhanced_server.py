@@ -963,38 +963,44 @@ def chat_completions():
                 user_prompt = redact_pii(msg.get('content', '')[:200])
                 break
         
-        # --- TUNING FIX: ALLOW CODING QUESTIONS ---
-        # If the user is asking for code generation (not execution), lower the risk.
+        # ======================================================
+        # TUNING FIX: Allow Safe Coding Questions
+        # ======================================================
         full_prompt = " ".join([msg.get('content', '') for msg in messages if msg.get('role') == 'user'])
-        lower_case_prompt = full_prompt.lower()
+        prompt_lower = full_prompt.lower()
         
-        # Whitelist harmless coding phrases
-        safe_coding_intents = [
-            "write a python function", 
-            "show me code", 
+        # 1. Define safe intents (asking for help)
+        safe_intents = [
+            "write a python function",
+            "how to code",
+            "code example",
+            "show me code",
+            "write code",
             "how do i code",
             "example of",
             "calculate fibonacci"
         ]
-
-        # Blocklist strictly dangerous execution keywords
-        dangerous_execution_keywords = [
-            "import os", 
-            "subprocess.popen", 
-            "exec(", 
-            "eval(", 
-            "rm -rf"
+        
+        # 2. Define strictly dangerous executions (RCE)
+        danger_signals = [
+            "import os",
+            "subprocess",
+            "eval(",
+            "exec(",
+            "rm -rf",
+            "cmd.exe",
+            "subprocess.popen"
         ]
 
-        # LOGIC: If it looks like a question AND doesn't have dangerous imports -> It's Safe.
-        is_safe_question = any(phrase in lower_case_prompt for phrase in safe_coding_intents)
-        has_danger = any(keyword in lower_case_prompt for keyword in dangerous_execution_keywords)
+        # 3. Logic: If it's a question AND has no dangerous imports -> ALLOW it
+        is_educational = any(s in prompt_lower for s in safe_intents)
+        has_danger = any(d in prompt_lower for d in danger_signals)
 
-        if is_safe_question and not has_danger:
-            print(f"✅ TUNING: Downgrading risk for valid coding question.")
-            analysis['risk_score'] = 0.0  # Force allow
+        if is_educational and not has_danger:
+            print(f"✅ TUNING: Downgrading risk for educational coding question.")
+            analysis['risk_score'] = 0.0
             analysis['should_block'] = False
-        # ------------------------------------------
+        # ======================================================
         
         log_entry = {
             "timestamp": datetime.now().isoformat(),

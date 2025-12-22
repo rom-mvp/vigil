@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vigil War Room</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white font-mono">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        function App() {
+            const [logs, setLogs] = React.useState([]);
+            const [stats, setStats] = React.useState({ blocked: 0, allowed: 0 });
+
+            // Poll the logs every 2 seconds
+            React.useEffect(() => {
+                const interval = setInterval(() => {
+                    // In a real app, you'd fetch /v1/logs. For now, we mock the live feed.
+                    // REPLACE THIS with a real fetch to your Python server log endpoint
+                    const mockLog = Math.random() > 0.7 ? {
+                        time: new Date().toLocaleTimeString(),
+                        ip: "192.168.1." + Math.floor(Math.random() * 255),
+                        risk: Math.random() > 0.5 ? "CRITICAL" : "SAFE",
+                        payload: Math.random() > 0.5 ? "DROP TABLE users;" : "Hello world",
+                        action: Math.random() > 0.5 ? "BLOCK" : "ALLOW"
+                    } : null;
+
+                    if (mockLog) {
+                        setLogs(prev => [mockLog, ...prev].slice(0, 10));
+                        setStats(prev => ({
+                            blocked: prev.blocked + (mockLog.action === "BLOCK" ? 1 : 0),
+                            allowed: prev.allowed + (mockLog.action === "ALLOW" ? 1 : 0)
+                        }));
+                    }
+                }, 1000);
+                return () => clearInterval(interval);
+            }, []);
+
+            return (
+                <div className="p-10 max-w-6xl mx-auto">
+                    <h1 className="text-4xl font-bold mb-8 text-red-500">🔭 VIGIL WAR ROOM</h1>
+                    
+                    <div className="grid grid-cols-2 gap-4 mb-8">
+                        <div className="bg-gray-800 p-6 rounded-lg border border-red-500">
+                            <h2 className="text-xl text-gray-400">THREATS BLOCKED</h2>
+                            <p className="text-6xl font-bold text-red-500">{stats.blocked}</p>
+                        </div>
+                        <div className="bg-gray-800 p-6 rounded-lg border border-green-500">
+                            <h2 className="text-xl text-gray-400">SAFE REQUESTS</h2>
+                            <p className="text-6xl font-bold text-green-500">{stats.allowed}</p>
+                        </div>
+                    </div>
+
+                    <div className="bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
+                        <table className="w-full text-left">
+                            <thead className="bg-gray-700 text-gray-300">
+                                <tr>
+                                    <th className="p-3">TIME</th>
+                                    <th className="p-3">SOURCE IP</th>
+                                    <th className="p-3">PAYLOAD SNIPPET</th>
+                                    <th className="p-3">DECISION</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {logs.map((log, i) => (
+                                    <tr key={i} className="border-b border-gray-700 hover:bg-gray-750">
+                                        <td className="p-3 text-gray-400">{log.time}</td>
+                                        <td className="p-3 text-blue-400">{log.ip}</td>
+                                        <td className="p-3 font-mono text-sm opacity-80">{log.payload}</td>
+                                        <td className="p-3">
+                                            <span className={`px-2 py-1 rounded text-xs font-bold ${log.action === "BLOCK" ? "bg-red-900 text-red-200" : "bg-green-900 text-green-200"}`}>
+                                                {log.action}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
