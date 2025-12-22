@@ -13,7 +13,7 @@ import time
 import signal
 sys.path.insert(0, 'src')
 
-from vigil.advanced_threat_detector import AdvancedThreatDetector
+from vigil.enclave_transport import EnclaveTransport
 from vigil.security_framework import SecurityFramework
 from vigil.vector_engine import VectorScanner
 

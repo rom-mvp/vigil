@@ -1,0 +1,3 @@
+INFO     vigil.api_key_auth:api_key_auth.py:49 APIKeyAuth connected to Redis: redis://localhost:6379/0
+INFO     vigil.token_meter:token_meter.py:53 TokenMeter connected to Redis: redis://localhost:6379/0
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:9000

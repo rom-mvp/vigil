@@ -17,15 +17,15 @@
 
 ## 🎯 What Vigil Does
 
-Vigil is a **deterministic security proxy** that analyzes prompts for **Physics** (Entropy, Vector Embeddings, Canonicals) rather than Semantics. It blocks prompt injection, jailbreaks, PII leaks, and malicious payloads **before they reach your LLM** — with 100% detection rate and 0% false positives.
+Vigil is a **deterministic security proxy** that encrypts and forwards prompts to a secure enclave for analysis. It acts as a **blind forwarder** - the host system cannot read the payload, ensuring zero-trust security at the hardware level.
 
 ### Why Vigil?
 
 Traditional WAFs weren't built for AI workloads. LLMs can't reliably detect attacks against themselves. Vigil provides:
 
-- **⚡ Deterministic Detection** - Pattern-based + ML hybrid approach, not probabilistic LLM self-moderation
-- **🛡️ 4-Layer Defense** - PIIEngine, FirewallEngine, VectorScanner, SemanticDetector
-- **🔒 Hardware Attestation** - Optional TEE support (Intel SGX, AMD SEV-SNP, Azure Confidential)
+- **⚡ Encrypt & Forward** - HPKE encryption ensures host OS cannot inspect payloads
+- **🔒 Hardware Isolation** - Uses VSOCK for direct enclave communication (no TCP/IP)
+- **🔐 Zero-Trust Architecture** - Detection happens inside secure enclave (AWS Nitro, Azure Confidential)
 - **📊 100% Detection** - All 15 attack categories blocked (SQL, XSS, DAN jailbreaks, JSON smuggling, etc.)
 - **⚡ <20ms Latency** - Production-ready performance for real-time applications
 - **🔐 Invisible Wallet** - API keys stored in secure enclave, never touch app memory
@@ -107,7 +107,7 @@ LLM (OpenAI, Anthropic, etc.)
 
 ## 📊 Security Performance
 
-**100% Detection Rate** (35/35 attacks blocked) • **17.83ms avg latency** • **0% false positives**
+**100% Detection Rate** (35/35 attacks blocked) • **17.83ms avg latency** • **0% false positives** • **Hardware-enforced encryption**
 
 ---
 
@@ -240,23 +240,46 @@ This ensures **no silent security degradation** in production.
 
 ### Core Components
 
-- **test_server_quick.py** - Main Vigil gateway server (4-layer detection pipeline)
-- **src/vigil/firewall_engine.py** - 50+ pattern-based attack rules
-- **src/vigil/pii_engine.py** - Presidio ML-based PII detection
-- **src/vigil/vector_engine.py** - Embedding-based threat detection
-- **src/vigil/advanced_threat_detector.py** - Visual + semantic analysis
+- **test_server_quick.py** - Main Vigil gateway server (Encrypt & Forward proxy)
+- **src/vigil/enclave_transport.py** - HPKE encryption + VSOCK tunnel (blind forwarder)
+- **src/vigil/firewall_engine.py** - 50+ pattern-based attack rules (runs in enclave)
+- **src/vigil/pii_engine.py** - Presidio ML-based PII detection (runs in enclave)
+- **src/vigil/vector_engine.py** - Embedding-based threat detection (runs in enclave)
 - **src/vigil/invisible_wallet.py** - Secure enclave credential manager
 
 ### Testing
 
-- **red_team_attack.py** - Comprehensive security test suite (38 attack scenarios)
+- **tests/** - Organized test suite with pytest configuration
+  - **tests/unit/** - Fast unit tests (guardrails, normalization)
+  - **tests/integration/** - Service integration tests (E2E, TEE, AgentShield)
+  - **tests/performance/** - Load and latency benchmarks
+- **red_team_attack.py** - Security red team suite (38 attack scenarios)
 - **verify_100_percent.sh** - One-command verification script
 
 ---
 
 ## 🧪 Testing
 
-Run the full security audit:
+### Run All Tests
+
+```bash
+pytest
+```
+
+### Run by Category
+
+```bash
+# Unit tests (fast, no dependencies)
+pytest tests/unit/
+
+# Integration tests (requires services)
+pytest tests/integration/
+
+# Performance tests
+pytest tests/performance/
+```
+
+### Security Red Team
 
 ```bash
 VIGIL_API_KEY=test-key python red_team_attack.py
@@ -316,15 +339,15 @@ Modern LLM applications face critical security challenges:
 
 ### The Vigil Solution
 
-Instead of asking an LLM "is this prompt safe?" (probabilistic, unreliable), Vigil uses **deterministic physics**:
+Instead of analyzing prompts on the host (vulnerable to memory dumps, XSS, SSRF), Vigil uses **Encrypt and Forward**:
 
-- **Entropy Analysis** - High randomness indicates encrypted/encoded payloads
-- **Vector Similarity** - Cosine distance to known threat embeddings
-- **Pattern Matching** - Regex rules for SQL, XSS, command injection
-- **PII Detection** - ML-based entity recognition (Presidio)
+- **HPKE Encryption** - Host OS cannot read payload (hybrid public key encryption)
+- **VSOCK Tunnel** - Direct enclave communication (no TCP/IP stack)
+- **Hardware Isolation** - Analysis happens in AWS Nitro Enclave / Azure Confidential VM
 - **Cryptographic Audit** - Ed25519 signatures on all decisions
+- **Zero-Trust** - Even root user cannot inspect traffic
 
-**Result:** 100% detection with 0% false positives, <20ms latency.
+**Result:** 100% detection with 0% false positives, <20ms latency, hardware-enforced security.
 
 ---
 

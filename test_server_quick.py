@@ -13,7 +13,7 @@ import time
 import os
 import requests
 import re
-from vigil.advanced_threat_detector import AdvancedThreatDetector
+from vigil.enclave_transport import EnclaveTransport
 from vigil.security_framework import SecurityFramework
 from vigil.api_key_auth import APIKeyAuth
 from vigil.pii_engine import PIIEngine
@@ -25,7 +25,7 @@ app = Flask(__name__)
 AGENTSHIELD_URL = os.environ.get('AGENTSHIELD_URL', 'http://localhost:5000')
 
 # Initialize ALL security components
-detector = AdvancedThreatDetector()
+enclave_transport = EnclaveTransport()
 framework = SecurityFramework()
 api_auth = APIKeyAuth()
 pii_engine = PIIEngine()
@@ -33,7 +33,7 @@ firewall = FirewallEngine()
 
 print(f"🛡️  Vigil Enhanced Server Starting...")
 print(f"   AgentShield URL: {AGENTSHIELD_URL}")
-print(f"   Threat Detector: Initialized")
+print(f"   Enclave Transport: Initialized (Encrypt & Forward Mode)")
 print(f"   Security Framework: Initialized")
 print(f"   PII Engine: Initialized")
 print(f"   Firewall Engine: Initialized")

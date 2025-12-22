@@ -11,14 +11,14 @@ import time
 from typing import Dict, List, Any, Tuple
 from datetime import datetime
 
-from vigil.advanced_threat_detector import AdvancedThreatDetector
+from vigil.enclave_transport import EnclaveTransport
 
 
 class SecurityFramework:
     """Main security framework with multi-layer defense"""
     
     def __init__(self):
-        self.threat_detector = AdvancedThreatDetector()
+        self.enclave_transport = EnclaveTransport()
         self.attack_log = []
         self.blocked_count = 0
         self.allowed_count = 0

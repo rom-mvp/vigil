@@ -6,7 +6,11 @@
     "start": "./start.sh",
     "stop": "pkill -f 'python.*local_server.py|python.*mock_agentshield.py' || true",
     "logs": "tail -f /tmp/agentshield.log /tmp/gateway.log",
-    "test": "cd tests && PYTHONPATH=../src pytest test_normalization.py -v",
+    "test": "PYTHONPATH=src pytest tests/",
+    "test:unit": "PYTHONPATH=src pytest tests/unit/ -v",
+    "test:integration": "PYTHONPATH=src pytest tests/integration/ -v",
+    "test:performance": "PYTHONPATH=src pytest tests/performance/ -v",
+    "test:coverage": "PYTHONPATH=src pytest --cov=src/vigil --cov-report=html --cov-report=term",
     "health": "curl -s http://localhost:9000/health && curl -s http://localhost:8000/health && echo '\\n✅ All services healthy'"
   },
   "repository": {
