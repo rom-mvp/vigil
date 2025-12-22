@@ -109,6 +109,29 @@ THREAT_PATTERNS = {
         "score": 0.93,
         "category": "dangerous_commands"
     },
+    "aws_credential_leak": {
+        "patterns": [
+            r"AKIA[0-9A-Z]{16}",  # AWS Access Key ID format
+            r"AWS_ACCESS_KEY_ID",
+            r"AWS_SECRET_ACCESS_KEY",
+            r"aws_secret_access_key",
+            r"(?:aws|amazon).*(?:key|secret|credential)",
+        ],
+        "score": 0.95,
+        "category": "aws_credential_leak"
+    },
+    "middleware_bypass_attempt": {
+        "patterns": [
+            r"X-Forwarded-Host",
+            r"X-Original-URL",
+            r"X-Rewrite-URL",
+            r"X-Middleware-Override",
+            r"middleware\s+bypass",
+            r"bypass.*(?:auth|security|middleware)",
+        ],
+        "score": 0.90,
+        "category": "middleware_bypass_attempt"
+    },
 }
 
 def check_threat(text):
@@ -168,8 +191,12 @@ def chat_completions():
                 user_prompt = msg.get('content', '')
                 break
         
-        # Check for threats
-        threat_result = check_threat(user_prompt)
+        # Also check HTTP headers for middleware bypass attempts
+        headers_to_check = str(request.headers)
+        full_content_to_check = user_prompt + "\n" + headers_to_check
+        
+        # Check for threats in both payload and headers
+        threat_result = check_threat(full_content_to_check)
         
         # Log the request
         log_entry = {

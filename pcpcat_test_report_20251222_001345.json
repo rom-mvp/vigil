@@ -1,0 +1,7 @@
+{
+  "operation": "PCPCAT",
+  "timestamp": "2025-12-22T00:13:45.895721",
+  "target": "http://localhost:8000",
+  "all_blocked": false,
+  "individual_results": []
+}
