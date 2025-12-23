@@ -1,45 +1,135 @@
 # Vigil
 
-**An AI safety firewall for production LLM applications**
+**LLM Policy Enforcement Gateway for Production AI Systems**
 
-Vigil sits between your application and any LLM (OpenAI, Anthropic, etc.) to detect and block prompt injection, jailbreaks, PII leaks, and other threats. Built for reliability and speed.
+Vigil is a **production-grade policy enforcement gateway** for Large Language Model (LLM) applications.
 
----
+It sits between your application and LLM providers (OpenAI, Anthropic, etc.) to **enforce security and usage policy, reduce risk, and provide visibility** into AI interactions — without requiring changes to application code.
 
-## Why Vigil?
-
-We built Vigil because existing tools couldn't handle production-scale AI safety:
-
-- **LLMs can't detect attacks on themselves** - You wouldn't ask a firewall if it's been hacked
-- **Traditional WAFs miss AI-specific threats** - Prompt injection looks like normal text
-- **False positives break user experience** - Security that blocks legitimate users isn't usable
-
-Vigil solves this with deterministic detection that's fast (<20ms), highly accurate, and production-ready.
+Vigil exposes an **OpenAI-compatible API** and can run standalone or as part of a broader AI control plane with AgentShield.
 
 ---
 
-## What Vigil Does
+## What problem Vigil solves
+
+As LLMs move from experimentation into production systems, teams face new risks:
+
+* Prompt injection and instruction override attacks
+* Jailbreak attempts that bypass application intent
+* Sensitive or regulated data leaking into prompts
+* Lack of visibility and auditability around AI usage
+* No centralized place to enforce policy across agents and apps
+
+Existing tools fail because:
+
+* Models cannot reliably enforce their own constraints
+* Traditional WAFs do not understand instruction-level attacks
+* Pure ML-based detectors introduce unacceptable false positives
+* Ad-hoc prompt rules do not scale or audit
+
+**Vigil provides a dedicated enforcement point for AI traffic**, where policy can be defined, tested, monitored, and evolved.
+
+---
+
+## What Vigil is (and is not)
+
+### Vigil **is**
+
+* An **LLM security and policy gateway**
+* A **control point** between applications and models
+* A way to **block, allow, or sanitize** AI requests
+* OpenAI-compatible and easy to integrate
+* Built for low latency and production reliability
+
+### Vigil **is not**
+
+* A guarantee against hallucinations
+* A replacement for application authorization logic
+* A model alignment or “AI truth” system
+
+Vigil enforces **boundaries and policy** — not correctness.
+
+---
+
+## How Vigil works
 
 ```
-Your App → Vigil → LLM Provider
+Your Application → Vigil → LLM Provider
 ```
 
-Vigil analyzes every prompt before it reaches the LLM:
+For every request, Vigil evaluates the input before it reaches the model.
 
-1. **PII Detection** - Blocks credit cards, SSNs, healthcare data (HIPAA/GDPR compliant)
-2. **Injection Patterns** - Detects SQL, XSS, command injection, path traversal
-3. **Semantic Analysis** - ML-based detection of jailbreaks, DAN attacks, adversarial prompts
-4. **Benign Pass-Through** - Normal queries go through instantly (<20ms)
+### Enforcement layers include:
+
+1. **Sensitive data detection**
+
+   * Identifies regulated identifiers (e.g. financial, healthcare, personal data)
+   * Blocks or flags requests based on policy
+
+2. **Instruction and capability abuse detection**
+
+   * Detects attempts to override system instructions
+   * Identifies unauthorized actions (policy changes, data exfiltration, tool misuse)
+
+3. **Semantic risk analysis (optional)**
+
+   * Embedding-based similarity against known risk concepts
+   * Tunable per agent profile
+   * Can be disabled for strictly deterministic enforcement
+
+4. **Obfuscation and entropy heuristics**
+
+   * Flags encoded or intentionally obscured payloads commonly used in bypass attempts
+
+Requests that pass policy are forwarded upstream.
+High-confidence violations are blocked immediately.
+
+Normal requests typically pass through in **<20ms**.
 
 ---
 
-## Quick Start
+## The Vigil SaaS offering (what you are actually selling)
+
+Vigil can be used in two ways:
+
+### 1. Standalone gateway (most users)
+
+* Run Vigil as a managed or self-hosted gateway
+* Enforce policy on all LLM calls
+* Gain visibility into AI usage and risk
+* No enclave or additional services required
+
+This is ideal for:
+
+* Startups and teams shipping AI features quickly
+* Production systems needing basic AI security controls
+* Agent-based applications with moderate privilege
+
+### 2. Control plane + governance (enterprises)
+
+When paired with **AgentShield**, Vigil becomes the **data plane** of a full AI control plane:
+
+* Vigil enforces policy inline
+* AgentShield signs decisions, manages secrets, and records tamper-evident audit logs
+* Optional confidential-compute deployment for sensitive workloads
+
+This is designed for:
+
+* Regulated environments
+* Multi-tenant AI platforms
+* Organizations needing auditability and governance
+
+---
+
+## Quick start
 
 ```bash
-# Start Vigil
 docker compose up --build
+```
 
-# Send a request (OpenAI-compatible API)
+Send a request using the OpenAI-compatible API:
+
+```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Authorization: Bearer test-key" \
   -H "Content-Type: application/json" \
@@ -49,20 +139,7 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-That's it. Vigil is now protecting your LLM calls.
-
----
-
-## How It Works
-
-Vigil uses **layered detection** similar to how spam filters work - multiple independent checks that vote on safety:
-
-- **Pattern Matching** - Fast regex rules for known attack patterns
-- **ML Embeddings** - Semantic similarity to known threat vectors
-- **PII Scanner** - Presidio-based entity recognition
-- **Entropy Analysis** - Detects obfuscated/encoded payloads
-
-All checks run in parallel. If any layer flags the prompt as unsafe, Vigil blocks it.
+That’s it — Vigil is now enforcing policy on your LLM calls.
 
 ---
 
@@ -96,119 +173,99 @@ const response = await fetch('http://localhost:8000/v1/chat/completions', {
   },
   body: JSON.stringify({
     model: 'gpt-4',
-    messages: [{role: 'user', content: 'Hello!'}]
+    messages: [{ role: 'user', content: 'Hello!' }]
   })
 });
 
 const data = await response.json();
 ```
 
-**No code changes required** - Vigil is OpenAI-compatible. Just change your base URL.
+**No SDK rewrite required.**
+Just change your base URL.
 
 ---
 
-## Performance
+## Performance characteristics
 
-| Metric | Result |
-|--------|--------|
-| Threat Detection | Industry-leading (35/35 attacks blocked in test suite) |
-| False Positives | Minimal (0/1000 benign queries in testing) |
-| Average Latency | 17.8ms |
-| P99 Latency | <50ms |
+Vigil is designed to be fast and predictable:
 
-Tested against OWASP LLM Top 10, HuggingFace adversarial datasets, and custom red team attacks.
+| Metric             | Observed (internal testing)       |
+| ------------------ | --------------------------------- |
+| Typical latency    | ~15–20ms                          |
+| P99 latency        | <50ms                             |
+| Detection approach | Deterministic + optional semantic |
+| Failure behavior   | Explicit, observable              |
+
+Performance depends on configuration and enabled features.
 
 ---
 
-## Repository Structure
+## Repository structure
 
-```
+```text
 vigil/
-├── src/vigil/              # Core Vigil gateway (public-facing)
-│   ├── guardrails.py       # Detection layers
-│   ├── firewall_engine.py  # Pattern matching
-│   ├── vector_engine.py    # ML embeddings
-│   └── pii_engine.py       # PII detection
-├── shared/                 # Shared libraries
-│   ├── schemas/            # Pydantic contracts
-│   ├── crypto/             # Encryption primitives
-│   └── errors/             # Standard error codes
-├── services/               # Microservices
-│   ├── vigil-gateway/      # Public API gateway
-│   └── agentshield-enclave/ # Secure enclave for sensitive analysis
+├── src/vigil/              # Core gateway logic
+│   ├── guardrails.py       # Enforcement layers
+│   ├── firewall_engine.py  # Deterministic rules
+│   ├── vector_engine.py    # Semantic analysis (optional)
+│   └── pii_engine.py       # Sensitive data detection
+├── shared/
+│   ├── schemas/            # API and policy contracts
+│   ├── crypto/             # Cryptographic primitives
+│   └── errors/             # Standardized error handling
+├── services/
+│   ├── vigil-gateway/      # Public API service
+│   └── agentshield-enclave/# Optional secure analysis path
 ├── tests/
-│   ├── unit/               # Fast unit tests
-│   ├── integration/        # E2E tests
-│   └── performance/        # Load tests
-├── red_team_attack.py      # Security verification (38 attack scenarios)
-└── docker-compose.yml      # One-command deployment
+│   ├── unit/
+│   ├── integration/
+│   └── performance/
+├── red_team_attack.py      # Injection and bypass tests
+└── docker-compose.yml
 ```
 
-### Relationship to AgentShield
+---
 
-Vigil is the **public gateway**. [AgentShield](https://github.com/rom-mvp/agentshield) is the **secure backend** that runs inside a Trusted Execution Environment (TEE).
+## Relationship to AgentShield
+
+Vigil is the **inline enforcement gateway**.
+[AgentShield](https://github.com/rom-mvp/agentshield) is the **control plane**.
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Your Application                                   │
-└──────────────────┬──────────────────────────────────┘
-                   │
-                   │ API calls
-                   │
-┌──────────────────▼──────────────────────────────────┐
-│  Vigil (this repo)                                  │
-│  - OpenAI-compatible API                            │
-│  - Fast detection layers                            │
-│  - PII scanning                                     │
-└──────────────────┬──────────────────────────────────┘
-                   │
-                   │ Encrypted payloads (HPKE)
-                   │
-┌──────────────────▼──────────────────────────────────┐
-│  AgentShield (separate repo)                        │
-│  - Runs in AWS Nitro Enclave / Azure Confidential   │
-│  - Hardware-isolated threat analysis                │
-│  - Encrypted policy enforcement                     │
-└──────────────────┬──────────────────────────────────┘
-                   │
-                   │ Decision: ALLOW/BLOCK
-                   │
-┌──────────────────▼──────────────────────────────────┐
-│  LLM Provider (OpenAI, Anthropic, etc.)             │
-└─────────────────────────────────────────────────────┘
+Application
+   ↓
+Vigil (policy enforcement)
+   ↓
+AgentShield (optional)
+   ↓
+LLM Provider
 ```
 
-**For most users:** Run Vigil standalone - it provides excellent protection without the complexity of hardware enclaves.
+AgentShield adds:
 
-**For enterprises:** Deploy both Vigil + AgentShield for hardware-enforced security guarantees (SOC 2, FedRAMP, HIPAA).
+* Signed enforcement decisions (Ed25519)
+* Tamper-evident audit logs
+* Just-in-time secret release
+* Governance and compliance hooks
+
+Vigil works independently; AgentShield adds higher-assurance controls.
 
 ---
 
 ## Testing
 
 ```bash
-# Run all tests
 pytest
-
-# Run security verification
 python red_team_attack.py
 ```
 
-Expected output:
-```
-📊 STATISTICS
-- Total Attacks Tested: 38
-- Blocked: 35/35 malicious payloads
-- False Positives: 0/3 benign queries
-- Average Latency: 17.83ms
-- Security Grade: A+
-```
+Tests focus on **policy enforcement correctness**, not model behavior.
 
 ---
 
-## Production Deployment
+## Deployment
 
-### Docker (Recommended)
+### Docker
 
 ```bash
 docker compose up -d
@@ -220,28 +277,27 @@ docker compose up -d
 kubectl apply -f k8s-deployment.yaml
 ```
 
-### Configuration
-
-Set these environment variables:
+### Configuration example
 
 ```bash
-export VIGIL_STRICT_MODE=true        # Fail-secure (crash on errors)
-export VIGIL_ENV=production          # Enable production optimizations
-export VIGIL_API_KEY=your-secret-key # API authentication
+VIGIL_ENV=production
+VIGIL_API_KEY=your-secret-key
+VIGIL_STRICT_MODE=true
+VIGIL_ML_ENABLED=true
 ```
 
 ---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+MIT License — see [LICENSE](LICENSE)
 
 ---
 
 ## Contact
 
-Built by an independent AI Safety team.
+Built by the Vigil team.
 
 📧 [suladesada@gmail.com](mailto:suladesada@gmail.com)
 
-For enterprise support, custom integrations, or security audits, reach out directly.
+For enterprise deployments, governance integrations, or architecture reviews, reach out.
