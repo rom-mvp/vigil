@@ -1,6 +1,6 @@
 # Vigil
 
-**LLM Policy Enforcement Gateway for Production AI Systems**
+**LLM Policy Enforcement Gateway for Production AI Systems (SDK)**
 
 Vigil is a **production-grade policy enforcement gateway** for Large Language Model (LLM) applications.
 
