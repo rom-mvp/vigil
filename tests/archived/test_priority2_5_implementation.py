@@ -16,6 +16,13 @@ import threading
 # Configuration
 VIGIL_URL = "http://localhost:8000"
 AGENTSHIELD_URL = "http://localhost:9000"
+AUTH_HEADERS = {
+    "Authorization": "Bearer vk_test_key",
+    "X-Tenant-ID": "test-tenant",
+    "X-Agent-ID": "test-agent",
+    "X-Policy-ID": "policy-test-123",
+    "Content-Type": "application/json",
+}
 
 
 def test_priority2_audit_logging():
@@ -30,12 +37,7 @@ def test_priority2_audit_logging():
                 {"role": "user", "content": "What is machine learning?"}
             ]
         },
-        headers={
-            "X-Tenant-ID": "test-tenant",
-            "X-Agent-ID": "test-agent",
-            "X-Policy-ID": "policy-test-123",
-            "X-Policy-Version": "1"
-        }
+        headers={**AUTH_HEADERS, "X-Policy-Version": "1"}
     )
     
     print(f"  ✓ Request successful: {response.status_code}")
@@ -80,10 +82,8 @@ def test_priority4_idempotency_key():
     # Make first request with idempotency key
     idempotency_key = "req-unique-123"
     headers = {
-        "X-Tenant-ID": "test-tenant",
-        "X-Agent-ID": "test-agent",
+        **AUTH_HEADERS,
         "X-Idempotency-Key": idempotency_key,
-        "X-Policy-ID": "policy-test"
     }
     
     response1 = requests.post(
@@ -131,7 +131,8 @@ def test_priority4_put_policies():
         json={
             "max_risk_score": 0.25,
             "rate_limit_rps": 10
-        }
+        },
+        headers=AUTH_HEADERS,
     )
     
     print(f"  ✓ PUT request status: {response.status_code}")
@@ -156,7 +157,7 @@ def test_priority4_api_aliases():
     print("\n✅ Testing Priority 4: API Endpoint Aliases")
     
     # Test /api/v1/audit/verify alias
-    response = requests.get(f"{VIGIL_URL}/api/v1/audit/verify")
+    response = requests.get(f"{VIGIL_URL}/api/v1/audit/verify", headers=AUTH_HEADERS)
     
     print(f"  ✓ /api/v1/audit/verify status: {response.status_code}")
     
@@ -177,15 +178,12 @@ def test_priority5_metrics():
         requests.post(
             f"{VIGIL_URL}/v1/chat/completions",
             json={"messages": [{"role": "user", "content": f"Test {i}"}]},
-            headers={
-                "X-Tenant-ID": "test-tenant",
-                "X-Agent-ID": f"agent-{i}"
-            }
+            headers={**AUTH_HEADERS, "X-Agent-ID": f"agent-{i}"},
         )
         time.sleep(0.05)
     
     # Get metrics
-    response = requests.get(f"{VIGIL_URL}/api/v1/metrics")
+    response = requests.get(f"{VIGIL_URL}/api/v1/metrics", headers=AUTH_HEADERS)
     
     print(f"  ✓ Metrics endpoint status: {response.status_code}")
     
@@ -246,7 +244,7 @@ def test_error_taxonomy():
     response = requests.post(
         f"{VIGIL_URL}/v1/chat/completions",
         json={"messages": [{"role": "user", "content": "test"}]},
-        headers={"X-Tenant-ID": "tenant"}
+        headers=AUTH_HEADERS,
     )
     
     # Check response

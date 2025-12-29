@@ -4,9 +4,8 @@ Test script for Vector Threat Scan integration
 Demonstrates the new embedding + VRAM vector search capability
 """
 
+import pytest
 import requests
-import json
-import sys
 
 VIGIL_URL = "http://localhost:8000"
 
@@ -56,97 +55,41 @@ test_cases = [
     }
 ]
 
-def test_vector_scan(test_case):
+def _vector_scan_case(test_case, headers):
     """Send request to Vigil and check vector scan results."""
-    
-    print(f"\n{'='*70}")
-    print(f"Test: {test_case['name']}")
-    print(f"{'='*70}")
-    print(f"Input: {test_case['messages'][0]['content']}")
-    print(f"Expected: {test_case['expected']}")
-    
-    try:
-        response = requests.post(
-            f"{VIGIL_URL}/v1/chat/completions",
-            json={"messages": test_case['messages']},
-            headers={
-                "X-Tenant-ID": "test-tenant",
-                "X-Agent-ID": "vector-test-agent",
-                "X-Policy-ID": "vector-test-policy",
-                "Content-Type": "application/json"
-            },
-            timeout=10
-        )
-        
-        print(f"\nResponse Status: {response.status_code}")
-        result = response.json()
-        print(f"Response: {json.dumps(result, indent=2)}")
-        
-        # Extract action from response
-        if response.status_code == 200:
-            action = result.get("action", "ALLOW")
-        elif response.status_code == 403:
-            action = "BLOCK"
-        else:
-            action = "ERROR"
-        
-        print(f"\n✓ Action: {action}")
-        
-        # Check if vector scan data is in audit logs
-        print(f"\nChecking audit logs for vector scan data...")
-        audit_response = requests.get(
-            f"{VIGIL_URL}/api/v1/audit/logs?limit=1",
-            timeout=5
-        )
-        
-        if audit_response.status_code == 200:
-            logs = audit_response.json().get("logs", [])
-            if logs:
-                latest_log = logs[-1]
-                entry = latest_log.get("entry", latest_log)
-                
-                # Check for vector scan results
-                vector_scan = entry.get("vector_scan", {})
-                if vector_scan:
-                    print(f"\n📊 Vector Scan Results:")
-                    print(f"   Threat Detected: {vector_scan.get('threat_detected', False)}")
-                    print(f"   Max Threat Score: {vector_scan.get('max_threat_score', 0.0):.4f}")
-                    print(f"   Vector Matches: {vector_scan.get('num_vector_matches', 0)}")
-                    
-                    top_threats = vector_scan.get('top_threats', [])
-                    if top_threats:
-                        print(f"\n   Top Threats Detected:")
-                        for i, threat in enumerate(top_threats, 1):
-                            print(f"     {i}. {threat.get('threat_type', 'unknown')} "
-                                  f"(score: {threat.get('score', 0.0):.4f}, "
-                                  f"severity: {threat.get('severity', 'unknown')})")
-                            print(f"        Pattern: {threat.get('pattern', 'N/A')}")
-                else:
-                    print("   ⚠️  No vector scan data found in audit log")
-                
-                # Check timings
-                timings = entry.get("timings", {})
-                if timings:
-                    print(f"\n⏱️  Timing Breakdown:")
-                    print(f"   Vector Scan: {timings.get('t_vector_ms', 0):.2f}ms")
-                    print(f"   AgentShield: {timings.get('t_agentshield_ms', 0):.2f}ms")
-                    print(f"   Total: {timings.get('t_total_ms', 0):.2f}ms")
-        
-        # Verify expected outcome
-        if action == test_case['expected']:
-            print(f"\n✅ TEST PASSED: Got expected action '{action}'")
-            return True
-        else:
-            print(f"\n❌ TEST FAILED: Expected '{test_case['expected']}' but got '{action}'")
-            return False
-            
-    except requests.exceptions.ConnectionError:
-        print(f"\n❌ ERROR: Cannot connect to Vigil at {VIGIL_URL}")
-        print("   Make sure Vigil is running: npm start")
-        return False
-    except Exception as e:
-        print(f"\n❌ ERROR: {str(e)}")
-        return False
+
+    response = requests.post(
+        f"{VIGIL_URL}/v1/chat/completions",
+        json={"messages": test_case['messages']},
+        headers=headers,
+        timeout=10,
+    )
+
+    if response.status_code == 200:
+        action = response.json().get("action", "ALLOW")
+    elif response.status_code == 403:
+        action = "BLOCK"
+    else:
+        action = "ERROR"
+
+    return response, action
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("test_case", test_cases, ids=[case["name"] for case in test_cases])
+def test_vector_scan(test_case, auth_headers):
+    headers = {
+        **auth_headers,
+        "X-Agent-ID": "vector-test-agent",
+        "X-Policy-ID": "vector-test-policy",
+    }
+
+    response, action = _vector_scan_case(test_case, headers)
+
+    # Verify expected outcome
+    assert action == test_case["expected"], (
+        f"Unexpected action {action} for {test_case['name']}: status {response.status_code}"
+    )
 
 def main():
     """Run all test cases."""

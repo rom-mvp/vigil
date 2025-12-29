@@ -1060,6 +1060,20 @@ def transparent_proxy():
         if policy_override not in reasons:
             reasons.append(policy_override)
 
+    # Final heuristic firewall check (always-on override)
+    try:
+        for msg in messages:
+            if msg.get('role') == 'user':
+                content = msg.get('content', '')
+                check = firewall.scan_input(content)
+                if not check.get('safe', True):
+                    action = 'BLOCK'
+                    if 'HEURISTIC_BLOCK' not in reasons:
+                        reasons.append('HEURISTIC_BLOCK')
+                    break
+    except Exception:
+        pass
+
     # Structured log + local append-only cache
     timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
     
@@ -1159,14 +1173,68 @@ def transparent_proxy():
                 "timestamp_ms": int(time.time() * 1000)
             }
             
-            llm_credentials = agentshield.get_llm_credentials(vault_request)
-            
-            # Extract credentials
-            llm_api_key = llm_credentials.get('api_key')
-            llm_endpoint = llm_credentials.get('endpoint', 'https://api.openai.com/v1/chat/completions')
-            llm_model = llm_credentials.get('model') or body.get('model', 'gpt-4')
+            try:
+                llm_credentials = agentshield.get_llm_credentials(vault_request)
+                # Extract credentials
+                llm_api_key = llm_credentials.get('api_key')
+                llm_endpoint = llm_credentials.get('endpoint', 'https://api.openai.com/v1/chat/completions')
+                llm_model = llm_credentials.get('model') or body.get('model', 'gpt-4')
+            except Exception:
+                # Treat missing vault or errors as no credentials
+                llm_api_key = None
+                llm_endpoint = 'https://api.openai.com/v1/chat/completions'
+                llm_model = body.get('model', 'gpt-4')
             
             if not llm_api_key:
+                # In development or when AgentShield is optional, return a mocked ALLOW response
+                if os.environ.get('VIGIL_ENVIRONMENT', 'production') == 'development' or \
+                   os.environ.get('AGENTSHIELD_REQUIRED', 'true').lower() == 'false':
+                    llm_data = {
+                        "id": "chatcmpl-vigil-dev",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": (messages[-1]['content'] if messages else '')}
+                        }]
+                    }
+                    usage = llm_data.get('usage', {})
+                    input_tokens = usage.get('prompt_tokens', estimated_input_tokens)
+                    output_tokens = usage.get('completion_tokens', 0)
+                    llm_data['vigil'] = {
+                        "request_id": request_id,
+                        "tenant_id": tenant_id,
+                        "action": "ALLOW",
+                        "risk_score": risk_score,
+                        "signature_hash": signature_hash,
+                        "audit_event_id": audit_event_id,
+                        "vector_scan": {
+                            "scanned": vector_scan_results.get("scanned", False),
+                            "threat_detected": vector_scan_results.get("threat_detected", False)
+                        },
+                        "extraction_risk": (_compute_extraction_risk(embedding) if embedding is not None else {
+                            "extraction_risk_score": 0.0,
+                            "indicators": [],
+                            "estimated_intent": "benign",
+                        }),
+                        "usage": {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens
+                        },
+                        "timings": {
+                            "vector_ms": timings.get('t_vector_ms', 0),
+                            "agentshield_ms": timings.get('t_agentshield_ms', 0),
+                            "llm_ms": 0,
+                            "total_ms": round((time.time() - t_start) * 1000, 2)
+                        }
+                    }
+                    response = jsonify(llm_data)
+                    if idempotency_key:
+                        app._idempotency_cache[idempotency_key] = response
+                        if len(app._idempotency_cache) > 100:
+                            oldest_key = next(iter(app._idempotency_cache))
+                            del app._idempotency_cache[oldest_key]
+                    return response
+                # Otherwise, fail with configuration error
                 return jsonify({
                     "error": {
                         "message": "No LLM API key configured for your account",

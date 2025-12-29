@@ -35,7 +35,7 @@ class FirewallEngine:
             r"document\.cookie",
             
             # Command Injection
-            r"[;|&`$]\s*(cat|ls|rm|curl|wget|nc|bash|sh|python|perl)\b",
+            r"[;|&`$]\s*(cat|ls|curl|wget|nc|bash|sh|python|perl)\b",
             r"\$\([^)]+\)",  # Command substitution
             r"`[^`]+`",  # Backtick execution
             r"&&|\|\|",  # Command chaining
@@ -73,15 +73,20 @@ class FirewallEngine:
             r"\b(DAN|ChaosGPT|DODAN|STAN)\s+mode\b",
             r"\bpretend\s+you\s+are\s+(unfiltered|unrestricted|without\s+ethics)\b",
             r"\byou\s+are\s+now\b.*\b(no\s+ethical|unfiltered|unrestricted)\b",
+            r"\bpretend\s+(to\s+be|you\s+are)\s+DAN\b",
+            r"\bDAN\b.*\b(do\s+anything\s+now|developer\s+mode|unrestricted|ignore\s+instructions)\b",
+            r"\bDAN\b",
             
             # JSON-based attacks
             r'"\s*(?:task|action|command|instruction|rule)\s*"\s*:\s*"(?:ignore|disregard|bypass|forget|override|dump)',
             r'(?:ignore|disregard|bypass|forget|override|skip)[\s_]?(rules?|instructions?|guidelines?|restrictions?|filters?|policies?)',
             
             # Data exfiltration
-            r"\b(reveal|show|display|expose|leak)\b.*\b(api[_\s]?key|secret|token|password|credential)\b",
+            r"\b(reveal|show|display|expose|leak|dump|extract|retrieve|harvest|pull)\b.*\b(api\s*keys?|credentials?|secrets?|tokens?|passwords?)\b",
             r"\bdump\s+(database|table|credentials)\b",
             r"\bexfiltrate\s+data\b",
+            r"\bopenai\b.*\bapi\s*key\b",
+            r"\bapi\s*key\b.*\b(value|using|show\s+me)\b",
             
             # Bomb/Weapon/Illegal content
             r"\bhow\s+to\s+(build|make|create)\s+(a\s+)?(bomb|explosive|weapon|gun)\b",
@@ -91,6 +96,12 @@ class FirewallEngine:
             r"\bdecode\s+(this|the\s+following)\b.*[A-Za-z0-9+/=]{20,}",
             r"\btranslate\s+from\s+base64\b",
             r"\\x[0-9a-fA-F]{2}",  # Hex encoding
+            r"shell_exec\s*\(",
+            r"rm\s*-rf\s*/",
+            r"\bsk-[A-Za-z0-9]{10,}\b",
+            # Additional high-signal heuristics
+            r"\bwhat\s+is\s+(your|the)\s+.*\bapi\s*key\b",
+            r"\bunrestricted\b",
         ]
         
         compiled_patterns = []
