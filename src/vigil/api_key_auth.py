@@ -13,6 +13,11 @@ from typing import Optional, Dict, Tuple
 logger = logging.getLogger(__name__)
 
 
+class InvalidAPIKey(Exception):
+    """Raised when an API key does not meet required format."""
+
+
+
 class APIKeyAuth:
     """
     Validates API keys and resolves tenant identity.
@@ -70,8 +75,7 @@ class APIKeyAuth:
                 - status: string (active|suspended)
         """
         if not api_key or not api_key.startswith('vk_'):
-            logger.warning(f"Invalid API key format: {api_key[:10]}...")
-            return None, None
+            raise InvalidAPIKey("Invalid API key format")
         
         if not self.redis_client:
             logger.error("Redis not available for API key validation")

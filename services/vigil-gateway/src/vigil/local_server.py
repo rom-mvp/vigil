@@ -22,7 +22,7 @@ from .merkle_log_store import MerkleLogStore
 from .agentshield_client import AgentShieldClient, VigilErrorCode
 from .log_sync_worker import LogSyncWorker
 from .vector_engine import VectorEngine
-from .api_key_auth import APIKeyAuth
+from .api_key_auth import APIKeyAuth, InvalidAPIKey
 from .token_meter import TokenMeter
 from .config import (
     VIGIL_MODE,
@@ -720,7 +720,16 @@ def transparent_proxy():
         }), 401
     
     # Validate API key and get tenant identity
-    tenant_id, tenant_metadata = api_key_auth.validate_key(api_key)
+    try:
+        tenant_id, tenant_metadata = api_key_auth.validate_key(api_key)
+    except InvalidAPIKey:
+        return jsonify({
+            "error": {
+                "message": "Invalid API key format (expected vk_ prefix)",
+                "code": 401,
+                "type": "invalid_request_error"
+            }
+        }), 401
     
     if not tenant_id:
         return jsonify({
