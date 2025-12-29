@@ -14,6 +14,8 @@ import re
 import string
 import redis
 import asyncio
+import logging
+import numpy as np
 
 from .firewall_engine import FirewallEngine
 from .pii_engine import PIIEngine
@@ -27,6 +29,7 @@ from .agentic_decision_engine import AgenticDecisionEngine
 from .feedback_loop_manager import FeedbackLoopManager
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 firewall = FirewallEngine()
 pii_engine = None  # Lazy-loaded on first use
 vector_engine = VectorEngine()  # Vector threat detection (ONNX/TensorRT + VRAM)
@@ -225,6 +228,123 @@ def ship_log_async(payload):
         except:
             pass 
     threading.Thread(target=_send).start()
+
+def _compute_extraction_risk(embedding: np.ndarray) -> dict:
+    """
+    Use GPU embeddings to detect extraction attack patterns.
+    Scores: 0.0 (benign) to 1.0 (high-confidence extraction)
+    """
+    risk = {
+        "extraction_risk_score": 0.0,
+        "indicators": [],
+        "estimated_intent": "benign",
+    }
+    try:
+        extraction_clusters = vector_engine.search(
+            embedding,
+            cluster="extraction",
+            top_k=3
+        )
+        if extraction_clusters:
+            best_match = extraction_clusters[0]
+            if best_match.get("distance", 1.0) < 0.7:
+                risk["extraction_risk_score"] = round(1.0 - best_match.get("distance", 1.0), 4)
+                risk["indicators"].append("embedding_similarity")
+                risk["estimated_intent"] = "capability_mapping"
+    except Exception as e:
+        # Default benign if any error; keep optional and non-breaking
+        pass
+    return risk
+
+@app.route('/v1/scan', methods=['POST'])
+def scan_endpoint():
+    """Lightweight scan endpoint returning vector scan and extraction risk."""
+    body = request.json or {}
+    text = body.get('text')
+    messages = body.get('messages', [])
+    if not text and messages:
+        text = " ".join([m.get('content', '') for m in messages if isinstance(m, dict)])
+    text = text or ""
+
+    # Normalize before scan
+    normalized = _normalize_text(text)
+    vector_results = vector_engine.scan(normalized)
+    try:
+        embedding = vector_engine.embed(normalized)
+    except Exception:
+        embedding = None
+    extraction_risk = _compute_extraction_risk(embedding) if embedding is not None else {
+        "extraction_risk_score": 0.0,
+        "indicators": [],
+        "estimated_intent": "benign",
+    }
+    scan_response = {
+        "risk_score": vector_results.get("max_score", 0.0),
+        "threat_vector": (vector_results.get("vector_hits", [])[:1] or []),
+        "detected_clusters": vector_results.get("detected_clusters", []),
+        "vigil": {
+            "extraction_risk": extraction_risk,
+            "vector_scan": {
+                "scanned": vector_results.get("scanned", False),
+                "threat_detected": vector_results.get("threat_detected", False),
+                "num_vector_matches": vector_results.get("num_hits", 0)
+            }
+        }
+    }
+    return jsonify(scan_response), 200
+
+@app.route('/v1/tool/execute', methods=['POST'])
+def execute_tool():
+    """
+    Execute tool with human-in-loop gating via AgentShield Approval Hub.
+
+    If approval_id is provided, execution is blocked until approved.
+    """
+    body = request.json or {}
+    approval_id = body.get("approval_id")
+
+    if approval_id:
+        status = agentshield.get_approval_status(approval_id)
+        if status == "pending":
+            return jsonify({
+                "status": "approval_pending",
+                "approval_id": approval_id,
+                "message": "Waiting for human approval",
+                "check_after_seconds": 5,
+            }), 202
+        elif status == "rejected":
+            logger.warning(f"Tool execution blocked: approval {approval_id} rejected")
+            return jsonify({
+                "error": "approval_rejected",
+                "approval_id": approval_id,
+                "message": "Human reviewer rejected this tool execution",
+            }), 403
+        elif status == "timeout":
+            return jsonify({
+                "error": "approval_timeout",
+                "approval_id": approval_id,
+                "message": "Approval request expired",
+            }), 408
+        # approved: continue
+
+    tool_name = body.get("tool_name")
+    tool_args = body.get("tool_args", {})
+    try:
+        result = _execute_tool_impl(tool_name, tool_args)
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"Tool execution failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+def _execute_tool_impl(tool_name: str, tool_args: dict) -> dict:
+    """Minimal stub for tool execution."""
+    if not tool_name:
+        raise ValueError("tool_name required")
+    # Example: echo tool
+    if tool_name == "echo":
+        return {"tool": "echo", "result": tool_args}
+    # Unknown tool
+    return {"tool": tool_name, "status": "executed", "args": tool_args}
 
 @app.route('/api/heartbeat', methods=['GET'])
 def heartbeat():
@@ -667,6 +787,15 @@ def transparent_proxy():
         "embedding_depth": 384,
         "vector_hits": []
     }
+    # Precompute embedding for extraction risk (optional)
+    embedding = None
+    try:
+        combined_input = " ".join([content for content in normalized_contents if content])
+        if combined_input:
+            embedding = vector_engine.embed(combined_input)
+    except Exception:
+        embedding = None
+
     try:
         # Combine all user messages for single embedding scan
         combined_input = " ".join([content for content in normalized_contents if content])
@@ -786,6 +915,7 @@ def transparent_proxy():
     error_code = None
     agentshield_decision = None  # Priority 2: Store original decision before override
     
+    agentshield_response = None
     try:
         # Use agentic decision if available and confident
         if agentic_decision and agentic_decision.confidence > 0.70:
@@ -813,6 +943,7 @@ def transparent_proxy():
                 # Include vector scan results for AgentShield decision context
                 "scan_results": enforcement_req["scan_results"]
             })
+            agentshield_response = decision_envelope
         timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
         decision = {
             "action": decision_envelope.get("decision"),
@@ -968,6 +1099,12 @@ def transparent_proxy():
             "num_vector_matches": vector_scan_results.get("num_hits", 0),
             "top_threats": vector_scan_results.get("vector_hits", [])[:3]  # Store top 3 for audit
         },
+        "extraction_risk_score": (_compute_extraction_risk(embedding).get("extraction_risk_score") if embedding is not None else 0.0),
+        "distillation_risk": {
+            "is_risk": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("is_distillation_risk", False),
+            "score": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("risk_score", 0.0),
+            "reasons": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("reasons", []),
+        },
         "timings": {
             "t_vector_ms": timings.get('t_vector_ms', 0),
             "t_agentshield_ms": timings.get('t_agentshield_ms', 0),
@@ -1112,6 +1249,11 @@ def transparent_proxy():
                     "scanned": vector_scan_results.get("scanned", False),
                     "threat_detected": vector_scan_results.get("threat_detected", False)
                 },
+                "extraction_risk": (_compute_extraction_risk(embedding) if embedding is not None else {
+                    "extraction_risk_score": 0.0,
+                    "indicators": [],
+                    "estimated_intent": "benign",
+                }),
                 "usage": {
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
@@ -1124,6 +1266,9 @@ def transparent_proxy():
                     "total_ms": round((time.time() - t_start) * 1000, 2)
                 }
             }
+            # Pass through AgentShield security metadata if present
+            if agentshield_response and isinstance(agentshield_response, dict):
+                llm_data['agentshield_security'] = agentshield_response.get('agentshield', {})
             
             response = jsonify(llm_data)
             

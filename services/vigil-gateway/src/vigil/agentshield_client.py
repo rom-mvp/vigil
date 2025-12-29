@@ -132,6 +132,8 @@ class AgentShieldClient:
         self._jwks_cache: Optional[Dict] = None
         self._jwks_cache_time: float = 0
         self._jwks_cache_ttl = int(os.getenv("AGENTSHIELD_JWKS_TTL", "3600"))
+        # Approval hub integration (optional)
+        self.approval_hub_url = os.getenv("AGENTSHIELD_APPROVAL_HUB", "http://localhost:9001")
         self._pubkey = self._load_pubkey()
         
         # Priority 5: Metrics and observability
@@ -458,6 +460,35 @@ class AgentShieldClient:
     def _get_keys(self) -> Dict:
         """Public method to get JWKS keys for dashboard API."""
         return self._fetch_jwks()
+
+    def get_approval_status(self, approval_id: str) -> str:
+        """
+        Poll AgentShield Approval Hub for a decision.
+
+        Returns: "pending", "approved", "rejected", or "timeout".
+        Fails open (returns "pending") on other errors.
+        """
+        try:
+            resp = requests.post(
+                f"{self.approval_hub_url}/approvals/check/{approval_id}",
+                timeout=self.timeout_ms / 1000.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                approved = data.get("approved", False)
+                rejected = data.get("rejected", False)
+                if approved:
+                    return "approved"
+                if rejected:
+                    return "rejected"
+                return "pending"
+            # Non-200: treat as pending to fail open
+            return "pending"
+        except requests.Timeout:
+            return "timeout"
+        except Exception as e:
+            # Fail open on unexpected errors
+            return "pending"
 
     def enforce(self, enforcement_request: dict) -> dict:
         if self.mode != "http":

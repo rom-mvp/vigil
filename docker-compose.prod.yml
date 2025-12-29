@@ -23,6 +23,23 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # AgentShield Approval Hub (optional)
+  agentshield-approval-hub:
+    image: agentshield:approval-hub:latest
+    container_name: agentshield-approval-hub
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://user:password@db:5432/agentshield}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    networks:
+      - vigil-network
+    ports:
+      - "9001:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # Vigil security gateway
   vigil:
     build:
@@ -56,7 +73,9 @@ services:
       # Logging
       - LOG_LEVEL=INFO
       - APPEND_LOG_PATH=/app/logs/vigil_audit.jsonl
-        - DASHBOARD_ADMIN_TOKEN=${DASHBOARD_ADMIN_TOKEN:-local-dev-token}
+      - DASHBOARD_ADMIN_TOKEN=${DASHBOARD_ADMIN_TOKEN:-local-dev-token}
+      # Approval Hub endpoint (optional)
+      - AGENTSHIELD_APPROVAL_HUB=http://agentshield-approval-hub:9001
     volumes:
       - vigil-logs:/app/logs
     networks:

@@ -280,10 +280,22 @@ kubectl apply -f k8s-deployment.yaml
 ### Configuration example
 
 ```bash
-VIGIL_ENV=production
-VIGIL_API_KEY=your-secret-key
-VIGIL_STRICT_MODE=true
-VIGIL_ML_ENABLED=true
+export VIGIL_STRICT_MODE=true        # Fail-secure (crash on errors)
+export VIGIL_ENV=production          # Enable production optimizations
+export VIGIL_API_KEY=your-secret-key # API authentication
+export VIGIL_ML_ENABLED=true         # Enable semantic detection
+
+# AgentShield integration (optional, non-breaking)
+export AGENTSHIELD_URL=http://agentshield-gateway:9000
+export AGENTSHIELD_APPROVAL_HUB=http://agentshield-approval-hub:9001
+export AGENTSHIELD_TIMEOUT_MS=3000
+
+# Model IP protection signals
+export DISTILLATION_DETECTION_ENABLED=true
+export EXTRACTION_RISK_CLUSTERS=enabled
+
+# Caching
+export REDIS_URL=redis://redis:6379/0
 ```
 
 ---

@@ -385,6 +385,40 @@ class VectorScanner:
                 "vector_hits": []
             }
 
+    def search(self, embedding: np.ndarray, cluster: str = None, top_k: int = 3) -> List[Dict[str, Any]]:
+        """
+        Search threat DB using a provided embedding. Optionally filter by cluster.
+
+        Returns list of matches: {"label", "score", "distance"} sorted by highest score.
+        """
+        self._lazy_init()
+        if embedding is None or self.threat_vectors is None or len(self.threat_vectors) == 0:
+            return []
+        try:
+            # Ensure embedding is normalized shape (1, dim)
+            emb = embedding
+            if emb.ndim == 1:
+                emb = emb.reshape(1, -1)
+            # Cosine similarity via dot product of normalized vectors
+            scores = np.dot(emb, self.threat_vectors.T).flatten()
+            indices = np.argsort(scores)[::-1]
+            results = []
+            for idx in indices[:top_k]:
+                label = self.threat_labels[idx] if idx < len(self.threat_labels) else "unknown"
+                if cluster:
+                    # Simple cluster filter: substring match on label
+                    if cluster.lower() not in str(label).lower():
+                        continue
+                score = float(scores[idx])
+                results.append({
+                    "label": label,
+                    "score": round(score, 4),
+                    "distance": round(1.0 - score, 4)
+                })
+            return results
+        except Exception:
+            return []
+
 
 # Backward compatibility alias
 VectorEngine = VectorScanner
