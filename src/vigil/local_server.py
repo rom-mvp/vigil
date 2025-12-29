@@ -13,7 +13,6 @@ import unicodedata
 import re
 import string
 import redis
-import asyncio
 import logging
 import numpy as np
 
@@ -25,8 +24,15 @@ from .log_sync_worker import LogSyncWorker
 from .vector_engine import VectorEngine
 from .api_key_auth import APIKeyAuth
 from .token_meter import TokenMeter
-from .agentic_decision_engine import AgenticDecisionEngine
-from .feedback_loop_manager import FeedbackLoopManager
+from .config import (
+    VIGIL_MODE,
+    AGENTSHIELD_URL,
+    AGENTSHIELD_JWKS_URL,
+    AGENTSHIELD_TIMEOUT_MS,
+    AGENTSHIELD_FAIL_MODE,
+)
+import jwt
+from jwt import PyJWKClient
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
@@ -34,15 +40,41 @@ firewall = FirewallEngine()
 pii_engine = None  # Lazy-loaded on first use
 vector_engine = VectorEngine()  # Vector threat detection (ONNX/TensorRT + VRAM)
 append_store = MerkleLogStore(os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl'))
-agentshield = AgentShieldClient()
+agentshield = AgentShieldClient(
+    base_url=AGENTSHIELD_URL or "http://localhost:9000",
+    jwks_url=AGENTSHIELD_JWKS_URL or "http://localhost:9000/.well-known/jwks.json",
+    timeout_ms=AGENTSHIELD_TIMEOUT_MS,
+    fail_mode=AGENTSHIELD_FAIL_MODE,
+)
+
+
+class PolicyViolation(Exception):
+    """Raised when a policy check or signature verification fails."""
+
+
+def verify_decision_jwt(decision_token: str, jwks_url: str) -> dict:
+    """Verify AgentShield-issued decision JWT using JWKS.
+
+    Fail closed on any verification error.
+    """
+    if not decision_token:
+        raise PolicyViolation("Missing decision token")
+    if not jwks_url:
+        raise PolicyViolation("JWKS URL missing for decision verification")
+
+    jwk_client = PyJWKClient(jwks_url)
+    signing_key = jwk_client.get_signing_key_from_jwt(decision_token)
+    claims = jwt.decode(
+        decision_token,
+        signing_key.key,
+        algorithms=["RS256", "ES256", "EdDSA"],
+        options={"verify_aud": False},
+    )
+    return claims
 
 # SaaS Components
 api_key_auth = APIKeyAuth()  # API key validation and tenant resolution
 token_meter = TokenMeter()  # Token counting and billing
-
-# 🤖 Agentic Components (NEW)
-agentic_engine = AgenticDecisionEngine(firewall, vector_engine, agentshield)  # Multi-strategy decision engine
-feedback_manager = FeedbackLoopManager()  # Continuous learning system
 
 def _get_pii_engine():
     global pii_engine
@@ -169,126 +201,40 @@ def _normalize_text(raw: str) -> str:
     text = raw
 
     def _readability_score(s: str) -> float:
-        vowels = sum(1 for ch in s.lower() if ch in 'aeiou')
-        spaces = s.count(' ')
-        letters = sum(1 for ch in s if ch.isalpha())
-        return vowels * 2 + spaces + letters * 0.1
+        # Structured log + append-only cache (ALLOW decision only, already verified)
+        timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
+        agentshield.metrics.record_latency(timings['t_total_ms'])
+        agentshield.metrics.record_decision('ALLOW')
 
-    # Base64 decode if it looks plausible
-    b64_candidate = re.sub(r"\s", "", text)
-    if len(b64_candidate) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/=]+", b64_candidate or ""):
-        try:
-            decoded = base64.b64decode(b64_candidate, validate=True)
-            decoded_str = decoded.decode('utf-8', errors='ignore')
-            if _is_mostly_printable(decoded_str):
-                text = decoded_str
-        except Exception:
-            pass
-
-    # Leetspeak normalization first
-    leet_map = str.maketrans({
-        '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's', '!': 'i'
-    })
-    text = text.translate(leet_map)
-
-    # Homoglyph and compatibility normalization
-    text = unicodedata.normalize('NFKC', text)
-
-    # Rot13 heuristic: token-level to avoid double-rotating mixed strings
-    tokens = []
-    skip_words = {"how","who","why","are","you","the","and","for","to","of","in","on","by","with","make","bomb","napalm"}
-    for w in text.split():
-        letters = sum(1 for ch in w if ch.isalpha())
-        if letters == 0:
-            tokens.append(w)
-            continue
-        vowels = sum(1 for ch in w.lower() if ch in 'aeiou')
-        vowel_ratio = vowels / letters if letters else 0
-        lower_w = w.lower()
-        if lower_w in skip_words:
-            tokens.append(w)
-            continue
-        if len(w) <= 3 and vowel_ratio < 0.6:  # rotate only short connector-like tokens
-            rw = codecs.decode(w, 'rot_13')
-            if _is_mostly_printable(rw) and _readability_score(rw) >= _readability_score(w):
-                tokens.append(rw)
-                continue
-        tokens.append(w)
-    text = " ".join(tokens)
-
-    return text
-
-
-def ship_log_async(payload):
-    def _send():
-        try:
-            # append to tamper-evident store first
-            append_store.append(payload)
-            requests.post(LOG_SERVER_URL, json=payload, timeout=1)
-        except:
-            pass 
-    threading.Thread(target=_send).start()
-
-def _compute_extraction_risk(embedding: np.ndarray) -> dict:
-    """
-    Use GPU embeddings to detect extraction attack patterns.
-    Scores: 0.0 (benign) to 1.0 (high-confidence extraction)
-    """
-    risk = {
-        "extraction_risk_score": 0.0,
-        "indicators": [],
-        "estimated_intent": "benign",
-    }
-    try:
-        extraction_clusters = vector_engine.search(
-            embedding,
-            cluster="extraction",
-            top_k=3
-        )
-        if extraction_clusters:
-            best_match = extraction_clusters[0]
-            if best_match.get("distance", 1.0) < 0.7:
-                risk["extraction_risk_score"] = round(1.0 - best_match.get("distance", 1.0), 4)
-                risk["indicators"].append("embedding_similarity")
-                risk["estimated_intent"] = "capability_mapping"
-    except Exception as e:
-        # Default benign if any error; keep optional and non-breaking
-        pass
-    return risk
-
-@app.route('/v1/scan', methods=['POST'])
-def scan_endpoint():
-    """Lightweight scan endpoint returning vector scan and extraction risk."""
-    body = request.json or {}
-    text = body.get('text')
-    messages = body.get('messages', [])
-    if not text and messages:
-        text = " ".join([m.get('content', '') for m in messages if isinstance(m, dict)])
-    text = text or ""
-
-    # Normalize before scan
-    normalized = _normalize_text(text)
-    vector_results = vector_engine.scan(normalized)
-    try:
-        embedding = vector_engine.embed(normalized)
-    except Exception:
-        embedding = None
-    extraction_risk = _compute_extraction_risk(embedding) if embedding is not None else {
-        "extraction_risk_score": 0.0,
-        "indicators": [],
-        "estimated_intent": "benign",
-    }
-    scan_response = {
-        "risk_score": vector_results.get("max_score", 0.0),
-        "threat_vector": (vector_results.get("vector_hits", [])[:1] or []),
-        "detected_clusters": vector_results.get("detected_clusters", []),
-        "vigil": {
-            "extraction_risk": extraction_risk,
+        ship_log_async({
+            "request_id": request_id,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "seq_id": _seq_id,
+            "status": "ALLOW",
+            "agent_id": agent_id,
+            "tenant_id": tenant_id,
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "environment": VIGIL_ENVIRONMENT,
+            "risk_score": risk_score,
+            "signature_hash": agentshield_response.get('decision_hash'),
+            "audit_event_id": agentshield_response.get('audit_event_id'),
+            "reasons": reasons,
+            "sig_verified": True,
+            "sig_key_id": agentshield_response.get('key_id'),
+            "input_hash": agentshield_response.get('input_hash'),
             "vector_scan": {
-                "scanned": vector_results.get("scanned", False),
-                "threat_detected": vector_results.get("threat_detected", False),
-                "num_vector_matches": vector_results.get("num_hits", 0)
+                "threat_detected": vector_scan_results.get("threat_detected", False),
+                "max_threat_score": vector_scan_results.get("max_score", 0.0),
+                "num_vector_matches": vector_scan_results.get("num_hits", 0),
+                "top_threats": vector_scan_results.get("vector_hits", [])[:3]
+            },
+            "timings": {
+                "t_vector_ms": timings.get('t_vector_ms', 0),
+                "t_agentshield_ms": timings.get('t_agentshield_ms', 0),
+                "t_total_ms": timings.get('t_total_ms', 0)
             }
+        })
         }
     }
     return jsonify(scan_response), 200
@@ -659,7 +605,7 @@ def ready():
         agentshield_ready = False
     
     return jsonify({
-        "ready": True,  # Vigil is always ready (can fall back)
+        "ready": agentshield_ready if VIGIL_MODE == 'saas' else True,
         "agentshield_available": agentshield_ready
     })
 
@@ -870,169 +816,106 @@ def transparent_proxy():
         # Note: timestamp_ms, ttl_ms, and input_hash are auto-added by AgentShieldClient
     }
     
-    # 🤖 USE AGENTIC DECISION ENGINE (parallel multi-strategy evaluation)
-    use_agentic = os.environ.get('VIGIL_USE_AGENTIC', 'true').lower() == 'true'
-    t_agentic_start = time.time()
-    agentic_decision = None
-    
-    if use_agentic:
-        try:
-            # Run agentic engine with parallel strategy evaluation
-            # This runs 5 strategies concurrently (vector, rules, behavioral, policy, contextual)
-            # instead of sequentially
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            agentic_decision = loop.run_until_complete(
-                agentic_engine.evaluate_async(
-                    content=" ".join([content for content in normalized_contents if content]),
-                    context={
-                        "request_id": request_id,
-                        "ip_address": request.remote_addr,
-                        "user_agent": request.headers.get('User-Agent', ''),
-                        "frequency_spike": False,  # Would be populated from rate limiter
-                        "is_repeat_attack": False  # Would be populated from threat intel
-                    },
-                    tenant_id=tenant_id,
-                    agent_id=agent_id,
-                    decision_request=enforcement_req
-                )
-            )
-            loop.close()
-            
-            timings['t_agentic_ms'] = round((time.time() - t_agentic_start) * 1000, 2)
-            
-            # Log agentic decision distribution
-            print(f"[AGENTIC] Decision: {agentic_decision.decision}, Confidence: {agentic_decision.confidence:.2%}, Risk: {agentic_decision.risk_score:.2f}")
-            
-        except Exception as e:
-            print(f"Warning: Agentic engine failed, falling back to legacy: {e}")
-            agentic_decision = None
-    
-    t_agentshield_start = time.time()
-    decision = None
-    enforcement_error = None
-    error_code = None
-    agentshield_decision = None  # Priority 2: Store original decision before override
-    
+    # =========================================================================
+    # MANDATORY POLICY ENFORCEMENT - No fallback allowed in SaaS mode
+    # =========================================================================
     agentshield_response = None
+    enforcement_error = None
     try:
-        # Use agentic decision if available and confident
-        if agentic_decision and agentic_decision.confidence > 0.70:
-            # Map agentic decision to enforcement format
-            decision_envelope = {
-                "decision": agentic_decision.decision,
-                "risk_score": agentic_decision.risk_score,
-                "reasons": [f"{sr.reasoning}" for sr in agentic_decision.strategy_results],
-                "decision_hash": None,
-                "audit_event_id": agentic_decision.audit_trace_id,
-                "key_id": None,
-                "confidence_score": agentic_decision.confidence,
-                "uncertainty": agentic_decision.uncertainty,
-                "strategy_breakdown": {sr.strategy.value: sr.to_dict() for sr in agentic_decision.strategy_results}
-            }
-        else:
-            # Fallback: obtain signed decision via /decision (legacy deterministic path)
-            decision_envelope = agentshield.get_decision({
-                "tenant_id": tenant_id,
-                "agent_id": agent_id,
-                "policy_id": policy_id,
-                "policy_version": policy_version,
-                "request_id": request_id,
-                "messages": messages,
-                # Include vector scan results for AgentShield decision context
-                "scan_results": enforcement_req["scan_results"]
-            })
-            agentshield_response = decision_envelope
+        t_agentshield_start = time.time()
+        agentshield_response = agentshield.enforce(enforcement_req)
         timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
-        decision = {
-            "action": decision_envelope.get("decision"),
-            "risk_score": decision_envelope.get("risk_score"),
-            "reasons": decision_envelope.get("reasons"),
-            "signature_hash": decision_envelope.get("decision_hash"),
-            "audit_event_id": decision_envelope.get("audit_event_id"),
-            "sig_verified": True,
-            "key_id": decision_envelope.get("key_id"),
-            "policy_id": policy_id,
-            "input_hash": enforcement_req.get("input_hash"),
-        }
     except Exception as e:
-        timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
         enforcement_error = str(e)
         error_code = getattr(e, 'vigil_error_code', VigilErrorCode.AGENTSHIELD_UNREACHABLE)
-        if not FALLBACK:
-            # Audit the failure with structured error code
-            ship_log_async({
-                "request_id": request_id,
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-                "seq_id": _seq_id,
-                "status": "ERROR",
-                "agent_id": agent_id,
-                "tenant_id": tenant_id,
-                "policy_id": policy_id,  # NEW
-                "policy_version": policy_version,
-                "environment": VIGIL_ENVIRONMENT,
-                "risk_score": None,
-                "signature_hash": None,
-                "audit_event_id": None,
-                "reasons": ["agentshield_failure"],
-                "sig_verified": False,
-                "sig_key_id": None,
-                "error": enforcement_error,
-                "error_code": error_code.value if error_code else None,  # NEW: structured error code
-                "input_hash": None,
-                "timings": timings
-            })
-            return jsonify({"error": {"message": "AgentShield unavailable or decision verification failed", "code": 503, "request_id": request_id, "error_code": error_code.value if error_code else None}}), 503
-        # Fallback path: run local firewall + PII
-        fallback_used = True
-        for msg in messages:
-            if msg.get('role') == 'user':
-                content = msg.get('content', '')
-                check = firewall.scan_input(content)
-                if not check['safe']:
-                    timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
-                    ship_log_async({
-                        "request_id": request_id,
-                        "timestamp": datetime.datetime.utcnow().isoformat(),
-                        "seq_id": _seq_id,
-                        "status": "BLOCK",
-                        "agent_id": agent_id,
-                        "tenant_id": tenant_id,
-                        "policy_id": policy_id,  # NEW
-                        "policy_version": policy_version,
-                        "environment": VIGIL_ENVIRONMENT,
-                        "risk_score": None,
-                        "reasons": [check['reason']],
-                        "fallback_used": True,
-                        "error_code": None,
-                        "input_hash": None,
-                        "timings": timings
-                    })
-                    return jsonify({"error": {"message": f"Blocked (fallback): {check['reason']}", "code": 403, "request_id": request_id}}), 403
-                clean_text, was_redacted = _get_pii_engine().scan_and_redact(content)
-                if was_redacted:
-                    msg['content'] = clean_text
-        decision = {
-            "action": "ALLOW",
-            "risk_score": 0.0,
-            "reasons": ["fallback"],
+        ship_log_async({
+            "request_id": request_id,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "seq_id": _seq_id,
+            "status": "ERROR",
+            "agent_id": agent_id,
+            "tenant_id": tenant_id,
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "environment": VIGIL_ENVIRONMENT,
+            "risk_score": None,
             "signature_hash": None,
             "audit_event_id": None,
-            "sanitized": messages,
-            "sig_verified": False
-        }
+            "reasons": ["agentshield_failure"],
+            "sig_verified": False,
+            "sig_key_id": None,
+            "error": enforcement_error,
+            "error_code": error_code.value if error_code else None,
+            "input_hash": None,
+            "timings": timings
+        })
+        return jsonify({"error": {"message": "AgentShield unavailable", "code": 503, "request_id": request_id, "error_code": error_code.value if error_code else None}}), 503
 
-    # Enforce AgentShield decision
-    action = decision.get('action')
-    risk_score = decision.get('risk_score')
-    signature_hash = decision.get('signature_hash')
-    audit_event_id = decision.get('audit_event_id')
-    reasons = decision.get('reasons', [])
-    sig_verified = decision.get('sig_verified', False)
-    sig_key_id = decision.get('key_id')
+    decision_action = agentshield_response.get('action') or agentshield_response.get('decision')
+    decision_token = agentshield_response.get('decision_token') or agentshield_response.get('token')
+    reasons = agentshield_response.get('reasons', [])
+    risk_score = agentshield_response.get('risk_score')
+
+    if decision_action != 'ALLOW':
+        ship_log_async({
+            "request_id": request_id,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "seq_id": _seq_id,
+            "status": decision_action or "BLOCK",
+            "agent_id": agent_id,
+            "tenant_id": tenant_id,
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "environment": VIGIL_ENVIRONMENT,
+            "risk_score": risk_score,
+            "signature_hash": None,
+            "audit_event_id": agentshield_response.get('audit_event_id'),
+            "reasons": reasons,
+            "sig_verified": False,
+            "sig_key_id": None,
+            "input_hash": agentshield_response.get('input_hash'),
+            "timings": timings
+        })
+        return jsonify({"error": {"message": "Blocked by policy", "code": 403, "request_id": request_id, "reasons": reasons}}), 403
+
+    try:
+        claims = verify_decision_jwt(decision_token, AGENTSHIELD_JWKS_URL)
+        if claims.get("decision") and claims.get("decision") != "ALLOW":
+            raise PolicyViolation("Invalid decision token decision claim")
+    except Exception as e:
+        ship_log_async({
+            "request_id": request_id,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "seq_id": _seq_id,
+            "status": "BLOCK",
+            "agent_id": agent_id,
+            "tenant_id": tenant_id,
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "environment": VIGIL_ENVIRONMENT,
+            "risk_score": risk_score,
+            "signature_hash": None,
+            "audit_event_id": agentshield_response.get('audit_event_id'),
+            "reasons": reasons + ["decision_token_invalid"],
+            "sig_verified": False,
+            "sig_key_id": None,
+            "input_hash": agentshield_response.get('input_hash'),
+            "timings": timings
+        })
+        return jsonify({"error": {"message": "Invalid decision token", "code": 403, "request_id": request_id}}), 403
+
+    # Enforce AgentShield decision (claims are already verified)
+    decision = claims or {}
+    action = decision.get('action', decision_action)
+    risk_score = decision.get('risk_score', risk_score)
+    signature_hash = decision.get('signature_hash', agentshield_response.get('decision_hash'))
+    audit_event_id = decision.get('audit_event_id', agentshield_response.get('audit_event_id'))
+    reasons = decision.get('reasons', []) or reasons
+    sig_verified = decision.get('sig_verified', True)
+    sig_key_id = decision.get('key_id', agentshield_response.get('key_id'))
     error_code_from_decision = decision.get('error_code')  # NEW: error code from verification
-    input_hash = decision.get('input_hash')  # NEW: input hash for audit
+    error_code_from_decision_value = error_code_from_decision.value if isinstance(error_code_from_decision, VigilErrorCode) else error_code_from_decision
+    input_hash = decision.get('input_hash', agentshield_response.get('input_hash'))  # NEW: input hash for audit
     policy_id_from_decision = decision.get('policy_id')  # NEW: policy_id from decision
     
     # Priority 2: Store original decision before any override
@@ -1103,7 +986,7 @@ def transparent_proxy():
         "sig_verified": sig_verified,
         "sig_key_id": sig_key_id,
         "policy_override": policy_override,
-        "error_code": error_code_from_decision.value if error_code_from_decision else None,  # NEW: structured error
+        "error_code": error_code_from_decision_value if error_code_from_decision_value else None,  # NEW: structured error
         "input_hash": input_hash,  # NEW: for audit trail
         "agentshield_decision": agentshield_decision,  # Priority 2: Store original decision
         # Vector scan results for audit trail
@@ -1137,258 +1020,125 @@ def transparent_proxy():
                 oldest_key = next(iter(app._idempotency_cache))
                 del app._idempotency_cache[oldest_key]
         return response
-    if action in ('SANITIZE', 'REWRITE'):
-        sanitized = decision.get('sanitized') or messages
-        # Provide a simple response indicating sanitation and the new content
-        response = jsonify({
-            "id": "chatcmpl-vigil-sanitized",
-            "action": action,
-            "risk_score": risk_score,
-            "signature_hash": signature_hash,
-            "audit_event_id": audit_event_id,
-            "reasons": reasons,
-            "sanitized_preview": {"before": messages, "after": sanitized},
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": sanitized[-1]['content'] if sanitized else ''}}]
-        })
-        # Priority 4: Cache idempotent response
-        if idempotency_key:
-            app._idempotency_cache[idempotency_key] = response
-            if len(app._idempotency_cache) > 100:
-                oldest_key = next(iter(app._idempotency_cache))
-                del app._idempotency_cache[oldest_key]
-        return response
+    # ============================================================================
+    # SAAS LLM FORWARDING - Step 4: Acquire secret via AgentShield (mandatory)
+    # ============================================================================
+    try:
+        secret = agentshield.acquire_secret(decision_token=decision_token, action="chat.completion")
+        llm_api_key = secret.get('api_key')
+        llm_endpoint = secret.get('endpoint', 'https://api.openai.com/v1/chat/completions')
+        llm_model = secret.get('model') or body.get('model', 'gpt-4')
+    except Exception as e:
+        return jsonify({"error": {"message": "AgentShield secret acquisition failed", "code": 503, "request_id": request_id}}), 503
+
+    if not llm_api_key:
+        return jsonify({
+            "error": {
+                "message": "No LLM API key configured for your account",
+                "code": 500,
+                "type": "configuration_error"
+            }
+        }), 500
 
     # ============================================================================
-    # SAAS LLM FORWARDING - Step 4: Get LLM Credentials from Vault
+    # SAAS LLM CALL - Step 5: Forward to LLM with Tenant's Key
     # ============================================================================
-    if action == 'ALLOW':
-        try:
-            # Retrieve tenant's LLM credentials from AgentShield Vault
-            vault_request = {
-                "tenant_id": tenant_id,
-                "agent_id": agent_id,
-                "policy_id": policy_id,
-                "request_id": request_id,
-                "provider": body.get("provider", "openai"),
-                "timestamp_ms": int(time.time() * 1000)
-            }
-            
-            try:
-                llm_credentials = agentshield.get_llm_credentials(vault_request)
-                # Extract credentials
-                llm_api_key = llm_credentials.get('api_key')
-                llm_endpoint = llm_credentials.get('endpoint', 'https://api.openai.com/v1/chat/completions')
-                llm_model = llm_credentials.get('model') or body.get('model', 'gpt-4')
-            except Exception:
-                # Treat missing vault or errors as no credentials
-                llm_api_key = None
-                llm_endpoint = 'https://api.openai.com/v1/chat/completions'
-                llm_model = body.get('model', 'gpt-4')
-            
-            if not llm_api_key:
-                # In development or when AgentShield is optional, return a mocked ALLOW response
-                if os.environ.get('VIGIL_ENVIRONMENT', 'production') == 'development' or \
-                   os.environ.get('AGENTSHIELD_REQUIRED', 'true').lower() == 'false':
-                    llm_data = {
-                        "id": "chatcmpl-vigil-dev",
-                        "choices": [{
-                            "index": 0,
-                            "message": {"role": "assistant", "content": (messages[-1]['content'] if messages else '')}
-                        }]
-                    }
-                    usage = llm_data.get('usage', {})
-                    input_tokens = usage.get('prompt_tokens', estimated_input_tokens)
-                    output_tokens = usage.get('completion_tokens', 0)
-                    llm_data['vigil'] = {
-                        "request_id": request_id,
-                        "tenant_id": tenant_id,
-                        "action": "ALLOW",
-                        "risk_score": risk_score,
-                        "signature_hash": signature_hash,
-                        "audit_event_id": audit_event_id,
-                        "vector_scan": {
-                            "scanned": vector_scan_results.get("scanned", False),
-                            "threat_detected": vector_scan_results.get("threat_detected", False)
-                        },
-                        "extraction_risk": (_compute_extraction_risk(embedding) if embedding is not None else {
-                            "extraction_risk_score": 0.0,
-                            "indicators": [],
-                            "estimated_intent": "benign",
-                        }),
-                        "usage": {
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": input_tokens + output_tokens
-                        },
-                        "timings": {
-                            "vector_ms": timings.get('t_vector_ms', 0),
-                            "agentshield_ms": timings.get('t_agentshield_ms', 0),
-                            "llm_ms": 0,
-                            "total_ms": round((time.time() - t_start) * 1000, 2)
-                        }
-                    }
-                    response = jsonify(llm_data)
-                    if idempotency_key:
-                        app._idempotency_cache[idempotency_key] = response
-                        if len(app._idempotency_cache) > 100:
-                            oldest_key = next(iter(app._idempotency_cache))
-                            del app._idempotency_cache[oldest_key]
-                    return response
-                # Otherwise, fail with configuration error
-                return jsonify({
-                    "error": {
-                        "message": "No LLM API key configured for your account",
-                        "code": 500,
-                        "type": "configuration_error"
-                    }
-                }), 500
-            
-            # ============================================================================
-            # SAAS LLM CALL - Step 5: Forward to LLM with Tenant's Key
-            # ============================================================================
-            timings['t_llm_start'] = time.time()
-            
-            # Prepare LLM request
-            llm_body = {
-                "model": llm_model,
-                "messages": messages,
-                **{k: v for k, v in body.items() if k not in ['model', 'messages', 'provider']}
-            }
-            
-            llm_headers = {
-                "Authorization": f"Bearer {llm_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            # Forward to LLM
-            llm_response = requests.post(
-                llm_endpoint,
-                json=llm_body,
-                headers=llm_headers,
-                timeout=60.0  # LLM timeout
-            )
-            
-            timings['t_llm_ms'] = round((time.time() - timings['t_llm_start']) * 1000, 2)
-            
-            if llm_response.status_code != 200:
-                return jsonify({
-                    "error": {
-                        "message": f"LLM request failed: {llm_response.status_code}",
-                        "code": llm_response.status_code,
-                        "type": "llm_error",
-                        "details": llm_response.text[:500]
-                    }
-                }), llm_response.status_code
-            
-            llm_data = llm_response.json()
-            
-            # ============================================================================
-            # SAAS METERING - Step 6: Record Token Usage for Billing
-            # ============================================================================
-            usage = llm_data.get('usage', {})
-            input_tokens = usage.get('prompt_tokens', estimated_input_tokens)
-            output_tokens = usage.get('completion_tokens', 0)
-            
-            # Async: Push to billing queue
-            token_meter.record_usage(
-                tenant_id=tenant_id,
-                request_id=request_id,
-                model=llm_model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                metadata={
-                    'agent_id': agent_id,
-                    'policy_id': policy_id,
-                    'tier': tier,
-                    'risk_score': risk_score,
-                    'audit_event_id': audit_event_id
-                }
-            )
-            
-            # Add Vigil metadata to response
-            llm_data['vigil'] = {
-                "request_id": request_id,
-                "tenant_id": tenant_id,
-                "action": "ALLOW",
-                "risk_score": risk_score,
-                "signature_hash": signature_hash,
-                "audit_event_id": audit_event_id,
-                "vector_scan": {
-                    "scanned": vector_scan_results.get("scanned", False),
-                    "threat_detected": vector_scan_results.get("threat_detected", False)
-                },
-                "extraction_risk": (_compute_extraction_risk(embedding) if embedding is not None else {
-                    "extraction_risk_score": 0.0,
-                    "indicators": [],
-                    "estimated_intent": "benign",
-                }),
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens
-                },
-                "timings": {
-                    "vector_ms": timings.get('t_vector_ms', 0),
-                    "agentshield_ms": timings.get('t_agentshield_ms', 0),
-                    "llm_ms": timings.get('t_llm_ms', 0),
-                    "total_ms": round((time.time() - t_start) * 1000, 2)
-                }
-            }
-            # Pass through AgentShield security metadata if present
-            if agentshield_response and isinstance(agentshield_response, dict):
-                llm_data['agentshield_security'] = agentshield_response.get('agentshield', {})
-            
-            response = jsonify(llm_data)
-            
-            # Priority 4: Cache idempotent response
-            if idempotency_key:
-                app._idempotency_cache[idempotency_key] = response
-                if len(app._idempotency_cache) > 100:
-                    oldest_key = next(iter(app._idempotency_cache))
-                    del app._idempotency_cache[oldest_key]
-            
-            return response
-            
-        except Exception as e:
-            # Log error but don't expose internal details
-            print(f"Error forwarding to LLM: {e}")
-            return jsonify({
-                "error": {
-                    "message": "Failed to forward request to LLM",
-                    "code": 500,
-                    "type": "internal_error",
-                    "request_id": request_id
-                }
-            }), 500
+    timings['t_llm_start'] = time.time()
 
-    # Fallback for non-ALLOW actions (shouldn't reach here)
-    response = jsonify({
-        "id": "chatcmpl-vigil-allow",
+    llm_body = {
+        "model": llm_model,
+        "messages": messages,
+        **{k: v for k, v in body.items() if k not in ['model', 'messages', 'provider']}
+    }
+
+    llm_headers = {
+        "Authorization": f"Bearer {llm_api_key}",
+        "Content-Type": "application/json"
+    }
+
+    llm_response = requests.post(
+        llm_endpoint,
+        json=llm_body,
+        headers=llm_headers,
+        timeout=60.0  # LLM timeout
+    )
+
+    timings['t_llm_ms'] = round((time.time() - timings['t_llm_start']) * 1000, 2)
+
+    if llm_response.status_code != 200:
+        return jsonify({
+            "error": {
+                "message": f"LLM request failed: {llm_response.status_code}",
+                "code": llm_response.status_code,
+                "type": "llm_error",
+                "details": llm_response.text[:500]
+            }
+        }), llm_response.status_code
+
+    llm_data = llm_response.json()
+
+    # ============================================================================
+    # SAAS METERING - Step 6: Record Token Usage for Billing
+    # ============================================================================
+    usage = llm_data.get('usage', {})
+    input_tokens = usage.get('prompt_tokens', estimated_input_tokens)
+    output_tokens = usage.get('completion_tokens', 0)
+
+    token_meter.record_usage(
+        tenant_id=tenant_id,
+        request_id=request_id,
+        model=llm_model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        metadata={
+            'agent_id': agent_id,
+            'policy_id': policy_id,
+            'tier': tier,
+            'risk_score': risk_score,
+            'audit_event_id': agentshield_response.get('audit_event_id')
+        }
+    )
+
+    llm_data['vigil'] = {
+        "request_id": request_id,
+        "tenant_id": tenant_id,
         "action": "ALLOW",
         "risk_score": risk_score,
-        "signature_hash": signature_hash,
-        "audit_event_id": audit_event_id,
-        "reasons": reasons,
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": f"Accepted: {messages[-1]['content']}" if messages else ''}
-        }]
-    })
-    # Priority 4: Cache idempotent response
+        "signature_hash": agentshield_response.get('decision_hash'),
+        "audit_event_id": agentshield_response.get('audit_event_id'),
+        "vector_scan": {
+            "scanned": vector_scan_results.get("scanned", False),
+            "threat_detected": vector_scan_results.get("threat_detected", False)
+        },
+        "extraction_risk": (_compute_extraction_risk(embedding) if embedding is not None else {
+            "extraction_risk_score": 0.0,
+            "indicators": [],
+            "estimated_intent": "benign",
+        }),
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens
+        },
+        "timings": {
+            "vector_ms": timings.get('t_vector_ms', 0),
+            "agentshield_ms": timings.get('t_agentshield_ms', 0),
+            "llm_ms": timings.get('t_llm_ms', 0),
+            "total_ms": round((time.time() - t_start) * 1000, 2)
+        }
+    }
+    if agentshield_response and isinstance(agentshield_response, dict):
+        llm_data['agentshield_security'] = agentshield_response.get('agentshield', {})
+
+    response = jsonify(llm_data)
+
     if idempotency_key:
         app._idempotency_cache[idempotency_key] = response
         if len(app._idempotency_cache) > 100:
             oldest_key = next(iter(app._idempotency_cache))
             del app._idempotency_cache[oldest_key]
-    return response
 
-    return jsonify({
-        "id": "chatcmpl-vigil-mock",
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": f"Vigil Accepted: {messages[-1]['content']}"}
-        }]
-    })
+    return response
 
 if __name__ == '__main__':
     print("🛡️  Vigil Gateway running on http://0.0.0.0:8000")
