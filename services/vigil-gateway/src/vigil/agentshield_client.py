@@ -116,15 +116,24 @@ class VigilMetrics:
 
 
 class AgentShieldClient:
-    def __init__(self):
-        self.base_url = os.getenv("AGENTSHIELD_URL", "http://localhost:9000")
-        self.timeout_ms = int(os.getenv("AGENTSHIELD_TIMEOUT_MS", "1000"))  # Reduced from 3000ms to 1000ms
+    def __init__(self, base_url: Optional[str] = None, jwks_url: Optional[str] = None, timeout_ms: Optional[int] = None, fail_mode: str = "deny", **_: Any):
+        mode_flag = os.getenv("VIGIL_MODE", "standalone")
+
+        self.base_url = base_url or os.getenv("AGENTSHIELD_URL") or "http://localhost:9000"
+        self.jwks_url = jwks_url or os.getenv("AGENTSHIELD_JWKS_URL")
+        self.timeout_ms = int(timeout_ms or os.getenv("AGENTSHIELD_TIMEOUT_MS", "1000"))
+        self.fail_mode = fail_mode or os.getenv("AGENTSHIELD_FAIL_MODE", "deny")
+
+        if mode_flag == "saas":
+            if not self.base_url:
+                raise RuntimeError("AgentShield base URL is required in SaaS mode")
+            if not self.jwks_url:
+                raise RuntimeError("AgentShield JWKS URL is required in SaaS mode")
         self.mode = os.getenv("AGENTSHIELD_MODE", "http")
-        self.require_signed = os.getenv("AGENTSHIELD_REQUIRE_SIGNED", "true").lower() == "true"
+        self.require_signed = True  # Mandatory in SaaS mode
         self.key_id = os.getenv("AGENTSHIELD_KEY_ID", "default")
         self.pubkey_path = os.getenv("AGENTSHIELD_PUBKEY_PATH")
         self.pubkey_pem = os.getenv("AGENTSHIELD_PUBKEY_PEM")
-        self.jwks_url = os.getenv("AGENTSHIELD_JWKS_URL")
         self.mtls_cert = os.getenv("AGENTSHIELD_MTLS_CERT")
         self.mtls_key = os.getenv("AGENTSHIELD_MTLS_KEY")
         self.max_retries = int(os.getenv("AGENTSHIELD_MAX_RETRIES", "2"))  # Retry on network errors only
@@ -135,15 +144,14 @@ class AgentShieldClient:
         # Approval hub integration (optional)
         self.approval_hub_url = os.getenv("AGENTSHIELD_APPROVAL_HUB", "http://localhost:9001")
         self._pubkey = self._load_pubkey()
-        
+
         # Priority 5: Metrics and observability
         self.metrics = VigilMetrics()
         
         # Priority 5: Background key refresh thread
         self._start_background_key_refresh()
 
-        # Priority 6: High Availability & Fail-Open
-        self.fail_open = os.getenv("FAIL_OPEN", "false").lower() == "true"
+        # Priority 6: High Availability & Fail-Closed
         self.decision_cache = OrderedDict()
         self.decision_cache_ttl = 300  # 5 minutes default for cache validity
         self.decision_cache_limit = 1000
@@ -602,37 +610,14 @@ class AgentShieldClient:
                 self.metrics.record_error(error_code.value)
                 break
         
-        # All retries exhausted or non-retryable error
+        # All retries exhausted or non-retryable error (fail-closed)
         if last_exception:
-            # Priority 6: Fail-Open / Bypass Mode
-            if self.fail_open:
-                # Log the bypass event if we have a worker
-                if self.log_sync_worker:
-                    bypass_event = {
-                        "action": "BYPASS",
-                        "reason": "connection_refused_fail_open",
-                        "request_id": enforcement_request.get("request_id"),
-                        "tenant_id": enforcement_request.get("tenant_id"),
-                        "agent_id": enforcement_request.get("agent_id"),
-                        "timestamp": time.time(),
-                        "original_error": str(last_exception)
-                    }
-                    self.log_sync_worker.add_event(bypass_event)
-                
-                # Return a synthesized ALLOW decision
-                return {
-                    "action": "ALLOW",
-                    "risk_score": 0.0,
-                    "reasons": ["fail_open_bypass"],
-                    "sig_verified": False,
-                    "bypass": True,
-                    "input_hash": input_hash
-                }
-
             error = RuntimeError(f"AgentShield enforcement failed: {str(last_exception)}")
             error.vigil_error_code = error_code
             error.__cause__ = last_exception
-            raise error
+            if self.fail_mode == "deny":
+                raise error
+            raise
         
         # Should never reach here
         error = RuntimeError("AgentShield enforcement failed: unknown error")
@@ -712,6 +697,38 @@ class AgentShieldClient:
                 err = RuntimeError(f"AgentShield decision failed: {e}; fallback also failed: {fallback_e}")
                 err.vigil_error_code = VigilErrorCode.AGENTSHIELD_UNREACHABLE
                 raise err
+
+    def acquire_secret(self, decision_token: str, action: str) -> dict:
+        """Retrieve an LLM secret via AgentShield vault.
+
+        Args:
+            decision_token: Signed decision JWT from AgentShield
+            action: Action name (e.g., "chat.completion")
+
+        Returns:
+            Dict containing secret material (api_key, endpoint, model, etc.)
+        """
+        if not decision_token:
+            raise RuntimeError("decision_token is required to acquire secret")
+
+        url = f"{self.base_url}/v1/secrets/acquire"
+        try:
+            resp = requests.post(
+                url,
+                json={"decision_token": decision_token, "action": action},
+                timeout=self.timeout_ms / 1000.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise RuntimeError("Invalid secret response")
+            if not data.get("api_key"):
+                raise RuntimeError("Secret response missing api_key")
+            return data
+        except Exception as e:
+            err = RuntimeError(f"AgentShield secret acquisition failed: {e}")
+            err.__cause__ = e
+            raise err
 
     def _verify_decision_envelope(self, envelope: dict) -> None:
         """Verify Ed25519 signature over canonical decision payload.

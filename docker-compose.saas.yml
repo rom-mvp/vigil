@@ -15,6 +15,10 @@ services:
       # Environment
       - VIGIL_ENV=docker
       - VIGIL_STRICT_MODE=true
+      - VIGIL_MODE=saas
+      - AGENTSHIELD_URL=http://agentshield-gateway:9000
+      - AGENTSHIELD_JWKS_URL=http://agentshield-gateway:9000/.well-known/jwks.json
+      - AGENTSHIELD_FAIL_MODE=deny
       
       # Enclave Connection (Docker DNS resolves 'agentshield-enclave')
       - ENCLAVE_URL=http://agentshield-enclave:5000
