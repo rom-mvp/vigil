@@ -201,43 +201,54 @@ def _normalize_text(raw: str) -> str:
     text = raw
 
     def _readability_score(s: str) -> float:
-        # Structured log + append-only cache (ALLOW decision only, already verified)
-        timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
-        agentshield.metrics.record_latency(timings['t_total_ms'])
-        agentshield.metrics.record_decision('ALLOW')
+        vowels = sum(1 for ch in s.lower() if ch in 'aeiou')
+        spaces = s.count(' ')
+        letters = sum(1 for ch in s if ch.isalpha())
+        return vowels * 2 + spaces + letters * 0.1
 
-        ship_log_async({
-            "request_id": request_id,
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "seq_id": _seq_id,
-            "status": "ALLOW",
-            "agent_id": agent_id,
-            "tenant_id": tenant_id,
-            "policy_id": policy_id,
-            "policy_version": policy_version,
-            "environment": VIGIL_ENVIRONMENT,
-            "risk_score": risk_score,
-            "signature_hash": agentshield_response.get('decision_hash'),
-            "audit_event_id": agentshield_response.get('audit_event_id'),
-            "reasons": reasons,
-            "sig_verified": True,
-            "sig_key_id": agentshield_response.get('key_id'),
-            "input_hash": agentshield_response.get('input_hash'),
-            "vector_scan": {
-                "threat_detected": vector_scan_results.get("threat_detected", False),
-                "max_threat_score": vector_scan_results.get("max_score", 0.0),
-                "num_vector_matches": vector_scan_results.get("num_hits", 0),
-                "top_threats": vector_scan_results.get("vector_hits", [])[:3]
-            },
-            "timings": {
-                "t_vector_ms": timings.get('t_vector_ms', 0),
-                "t_agentshield_ms": timings.get('t_agentshield_ms', 0),
-                "t_total_ms": timings.get('t_total_ms', 0)
-            }
-        })
-        }
-    }
-    return jsonify(scan_response), 200
+    # Base64 decode if it looks plausible
+    b64_candidate = re.sub(r"\s", "", text)
+    if len(b64_candidate) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/=]+", b64_candidate or ""):
+        try:
+            decoded = base64.b64decode(b64_candidate, validate=True)
+            decoded_str = decoded.decode('utf-8', errors='ignore')
+            if _is_mostly_printable(decoded_str):
+                text = decoded_str
+        except Exception:
+            pass
+
+    # Leetspeak normalization first
+    leet_map = str.maketrans({
+        '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's', '!': 'i'
+    })
+    text = text.translate(leet_map)
+
+    # Homoglyph and compatibility normalization
+    text = unicodedata.normalize('NFKC', text)
+
+    # Rot13 heuristic: token-level to avoid double-rotating mixed strings
+    tokens = []
+    skip_words = {"how","who","why","are","you","the","and","for","to","of","in","on","by","with","make","bomb","napalm"}
+    for w in text.split():
+        letters = sum(1 for ch in w if ch.isalpha())
+        if letters == 0:
+            tokens.append(w)
+            continue
+        vowels = sum(1 for ch in w.lower() if ch in 'aeiou')
+        vowel_ratio = vowels / letters if letters else 0
+        lower_w = w.lower()
+        if lower_w in skip_words:
+            tokens.append(w)
+            continue
+        if len(w) <= 3 and vowel_ratio < 0.6:  # rotate only short connector-like tokens
+            rw = codecs.decode(w, 'rot_13')
+            if _is_mostly_printable(rw) and _readability_score(rw) >= _readability_score(w):
+                tokens.append(rw)
+                continue
+        tokens.append(w)
+    text = " ".join(tokens)
+
+    return text
 
 @app.route('/v1/tool/execute', methods=['POST'])
 def execute_tool():
