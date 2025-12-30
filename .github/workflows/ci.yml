@@ -29,3 +29,9 @@ jobs:
         PYTHONPATH: src
       run: |
         pytest tests/test_guardrails.py
+
+    - name: Run fail-closed and Merkle audit integration tests
+      env:
+        PYTHONPATH: src
+      run: |
+        pytest tests/integration/test_fail_closed.py tests/integration/test_merkle_audit_chain.py -v --tb=short

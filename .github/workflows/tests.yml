@@ -23,6 +23,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run tests
+      - name: Run fast tests (unit/others)
+        env:
+          PYTHONPATH: src
         run: |
-          pytest -q
+          pytest -q --ignore=tests/integration --ignore=tests/performance --ignore=tests/archived
+
+      - name: Run fail-closed and Merkle audit integration tests
+        env:
+          PYTHONPATH: src
+        run: |
+          pytest tests/integration/test_fail_closed.py tests/integration/test_merkle_audit_chain.py -v --tb=short

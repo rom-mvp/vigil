@@ -169,3 +169,39 @@ class MerkleLogStore:
         except FileNotFoundError:
             pass
         return logs
+
+    def verify_chain(self, logs: Optional[list] = None) -> Dict[str, Any]:
+        """Verify Merkle chain integrity for the provided logs (or stored logs)."""
+        if logs is None:
+            logs = self.get_logs(limit=10000)
+
+        if not logs:
+            return {"valid": True, "valid_links": 0, "total": 0, "root_hash": None}
+
+        valid_links = 0
+        prev_hash = None
+
+        for idx, entry in enumerate(logs):
+            # Tolerate both file and DB shapes: either top-level keys or nested under 'entry'
+            entry_payload = entry.get("entry") if "entry" in entry else entry
+            stored_prev = entry.get("prev_hash")
+            stored_hash = entry.get("hash")
+
+            expected_hash = self._digest(entry_payload, stored_prev)
+            if stored_hash != expected_hash or stored_prev != prev_hash:
+                return {
+                    "valid": False,
+                    "valid_links": valid_links,
+                    "total": len(logs),
+                    "broken_at": idx,
+                }
+
+            valid_links += 1
+            prev_hash = stored_hash
+
+        return {
+            "valid": True,
+            "valid_links": valid_links,
+            "total": len(logs),
+            "root_hash": prev_hash,
+        }

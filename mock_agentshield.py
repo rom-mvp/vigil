@@ -14,6 +14,7 @@ from collections import defaultdict, Counter
 import datetime
 
 app = Flask(__name__)
+START_TIME = time.time()
 
 # In-memory analytics store (in production, use Redis/Database)
 analytics_store = {
@@ -27,7 +28,18 @@ analytics_store = {
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "healthy", "service": "mock-agentshield"})
+    uptime = round(time.time() - START_TIME, 2)
+    return jsonify({
+        "status": "ok",
+        "service": "mock-agentshield",
+        "uptime_seconds": uptime,
+        "decision_signing": {
+            "schema_version": "as_decision_v1",
+            "key_id": "k1",
+            "ready": True
+        },
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
+    })
 
 @app.route('/v1/keys/jwks', methods=['GET'])
 def jwks():
