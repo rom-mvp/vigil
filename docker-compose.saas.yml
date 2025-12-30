@@ -16,8 +16,8 @@ services:
       - VIGIL_ENV=docker
       - VIGIL_STRICT_MODE=true
       - VIGIL_MODE=saas
-      - AGENTSHIELD_URL=http://agentshield-enclave:9000
-      - AGENTSHIELD_JWKS_URL=http://agentshield-enclave:9000/v1/keys/jwks
+        - AGENTSHIELD_URL=http://agentshield-enclave:8443
+        - AGENTSHIELD_JWKS_URL=http://agentshield-enclave:8443/.well-known/jwks.json
       - AGENTSHIELD_FAIL_MODE=deny
       
       # Enclave Connection (Docker DNS resolves 'agentshield-enclave')
@@ -58,21 +58,24 @@ services:
   # ═══════════════════════════════════════════════════════════
   agentshield-enclave:
     build:
-      context: .
-      dockerfile: Dockerfile.agentshield
+        context: ../agentshield
+        dockerfile: core/Dockerfile
     container_name: agentshield-enclave
+      command: ["./entrypoint.sh"]
+      environment:
+        AGENT_SIGNING_KEY: dev_key
+        REDIS_URL: redis://redis:6379/1
+        LOG_LEVEL: info
     ports:
-      - "5000:9000"
-    environment:
-      - FLASK_APP=mock_agentshield.py
-      - FLASK_ENV=development
-      - PORT=9000
-    
+        - "8443:8443"
+      depends_on:
+        redis:
+          condition: service_started
     networks:
       - secure-mesh
     
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+        test: ["CMD", "curl", "-f", "http://localhost:8443/health"]
       interval: 15s
       timeout: 5s
       retries: 3
