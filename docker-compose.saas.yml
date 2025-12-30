@@ -6,7 +6,7 @@ services:
   # ═══════════════════════════════════════════════════════════
   vigil-gateway:
     build: 
-      context: ./services/vigil-gateway
+      context: .
       dockerfile: Dockerfile
     container_name: vigil-gateway
     ports:
@@ -16,8 +16,8 @@ services:
       - VIGIL_ENV=docker
       - VIGIL_STRICT_MODE=true
       - VIGIL_MODE=saas
-      - AGENTSHIELD_URL=http://agentshield-gateway:9000
-      - AGENTSHIELD_JWKS_URL=http://agentshield-gateway:9000/.well-known/jwks.json
+      - AGENTSHIELD_URL=http://agentshield-enclave:8443
+      - AGENTSHIELD_JWKS_URL=http://agentshield-enclave:8443/.well-known/jwks.json
       - AGENTSHIELD_FAIL_MODE=deny
       
       # Enclave Connection (Docker DNS resolves 'agentshield-enclave')
@@ -30,6 +30,11 @@ services:
       
       # Logging
       - LOG_LEVEL=info
+      
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     
     depends_on:
       - agentshield-enclave
@@ -53,8 +58,8 @@ services:
   # ═══════════════════════════════════════════════════════════
   agentshield-enclave:
     build: 
-      context: ./services/agentshield-enclave
-      dockerfile: Dockerfile.simulation  # For local dev
+      context: .
+      dockerfile: Dockerfile.agentshield
     container_name: agentshield-enclave
     environment:
       - APP_ENV=dev
@@ -70,7 +75,7 @@ services:
     # NO PORTS EXPOSED TO HOST!
     # Only accessible by Vigil inside secure-mesh network
     expose:
-      - "5000"
+      - "8443"
     
     networks:
       - secure-mesh
