@@ -58,34 +58,20 @@ services:
   # ═══════════════════════════════════════════════════════════
   agentshield-enclave:
     build: 
-      context: .
-      dockerfile: Dockerfile.agentshield
+      context: ../agentshield
+      dockerfile: Dockerfile
     container_name: agentshield-enclave
+    ports:
+      - "8443:8443"
     environment:
-      - APP_ENV=dev
-      - ENCLAVE_PRIVATE_KEY=mock_key_for_dev
-      
-      # Connect to Redis for policy cache
-      - REDIS_URL=redis://redis:6379/0
-      
-      # Feature flags
-      - ENABLE_TEE_ATTESTATION=false  # Mock mode for local dev
-      - ENABLE_INVISIBLE_WALLET=true
-    
-    # NO PORTS EXPOSED TO HOST!
-    # Only accessible by Vigil inside secure-mesh network
-    expose:
-      - "8443"
+      - AGENT_SIGNING_KEY=dev_key
+      - REDIS_URL=redis://redis:6379/1
     
     networks:
       - secure-mesh
     
-    volumes:
-      # Mount shared schemas
-      - ./shared:/app/shared:ro
-    
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8443/health"]
       interval: 15s
       timeout: 5s
       retries: 3
