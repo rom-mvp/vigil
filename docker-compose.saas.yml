@@ -34,7 +34,7 @@ services:
       # Redis connection
       - REDIS_URL=redis://redis:6379/0
       - REDIS_HOST=redis
-      - REDIS_PORT=6379
+      - REDIS_PORT="6379"
     
     depends_on:
       - agentshield-enclave
