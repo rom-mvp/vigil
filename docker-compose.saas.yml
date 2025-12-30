@@ -66,7 +66,7 @@ services:
       - ENCLAVE_PRIVATE_KEY=mock_key_for_dev
       
       # Connect to Redis for policy cache
-      - REDIS_URL=redis://redis:6379/1
+      - REDIS_URL=redis://redis:6379/0
       
       # Feature flags
       - ENABLE_TEE_ATTESTATION=false  # Mock mode for local dev
