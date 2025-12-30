@@ -16,8 +16,8 @@ services:
       - VIGIL_ENV=docker
       - VIGIL_STRICT_MODE=true
       - VIGIL_MODE=saas
-      - AGENTSHIELD_URL=http://agentshield-enclave:5000
-      - AGENTSHIELD_JWKS_URL=http://agentshield-enclave:5000/.well-known/jwks.json
+      - AGENTSHIELD_URL=http://agentshield-enclave:9000
+      - AGENTSHIELD_JWKS_URL=http://agentshield-enclave:9000/v1/keys/jwks
       - AGENTSHIELD_FAIL_MODE=deny
       
       # Enclave Connection (Docker DNS resolves 'agentshield-enclave')
@@ -57,21 +57,22 @@ services:
   # 2. AGENTSHIELD ENCLAVE - The "Smart" Vault (Backend Only)
   # ═══════════════════════════════════════════════════════════
   agentshield-enclave:
-    build: 
-      context: ../agentshield
-      dockerfile: Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile.agentshield
     container_name: agentshield-enclave
     ports:
-      - "8443:8443"
+      - "5000:9000"
     environment:
-      - AGENT_SIGNING_KEY=dev_key
-      - REDIS_URL=redis://redis:6379/1
+      - FLASK_APP=mock_agentshield.py
+      - FLASK_ENV=development
+      - PORT=9000
     
     networks:
       - secure-mesh
     
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8443/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 15s
       timeout: 5s
       retries: 3
