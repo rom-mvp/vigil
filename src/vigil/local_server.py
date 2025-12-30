@@ -848,27 +848,28 @@ def transparent_proxy():
     except Exception as e:
         enforcement_error = str(e)
         error_code = getattr(e, 'vigil_error_code', VigilErrorCode.AGENTSHIELD_UNREACHABLE)
-        ship_log_async({
-            "request_id": request_id,
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "seq_id": _seq_id,
-            "status": "ERROR",
-            "agent_id": agent_id,
-            "tenant_id": tenant_id,
-            "policy_id": policy_id,
-            "policy_version": policy_version,
-            "environment": VIGIL_ENVIRONMENT,
-            "risk_score": None,
-            "signature_hash": None,
-            "audit_event_id": None,
-            "reasons": ["agentshield_failure"],
-            "sig_verified": False,
-            "sig_key_id": None,
-            "error": enforcement_error,
-            "error_code": error_code.value if error_code else None,
-            "input_hash": None,
-            "timings": timings
-        })
+        if "ship_log_async" in globals():
+            ship_log_async({
+                "request_id": request_id,
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "seq_id": _seq_id,
+                "status": "ERROR",
+                "agent_id": agent_id,
+                "tenant_id": tenant_id,
+                "policy_id": policy_id,
+                "policy_version": policy_version,
+                "environment": VIGIL_ENVIRONMENT,
+                "risk_score": None,
+                "signature_hash": None,
+                "audit_event_id": None,
+                "reasons": ["agentshield_failure"],
+                "sig_verified": False,
+                "sig_key_id": None,
+                "error": enforcement_error,
+                "error_code": error_code.value if error_code else None,
+                "input_hash": None,
+                "timings": timings
+            })
         return jsonify({"error": {"message": "AgentShield unavailable", "code": 503, "request_id": request_id, "error_code": error_code.value if error_code else None}}), 503
 
     decision_action = agentshield_response.get('action') or agentshield_response.get('decision')
@@ -877,25 +878,26 @@ def transparent_proxy():
     risk_score = agentshield_response.get('risk_score')
 
     if decision_action != 'ALLOW':
-        ship_log_async({
-            "request_id": request_id,
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "seq_id": _seq_id,
-            "status": decision_action or "BLOCK",
-            "agent_id": agent_id,
-            "tenant_id": tenant_id,
-            "policy_id": policy_id,
-            "policy_version": policy_version,
-            "environment": VIGIL_ENVIRONMENT,
-            "risk_score": risk_score,
-            "signature_hash": None,
-            "audit_event_id": agentshield_response.get('audit_event_id'),
-            "reasons": reasons,
-            "sig_verified": False,
-            "sig_key_id": None,
-            "input_hash": agentshield_response.get('input_hash'),
-            "timings": timings
-        })
+        if "ship_log_async" in globals():
+            ship_log_async({
+                "request_id": request_id,
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "seq_id": _seq_id,
+                "status": decision_action or "BLOCK",
+                "agent_id": agent_id,
+                "tenant_id": tenant_id,
+                "policy_id": policy_id,
+                "policy_version": policy_version,
+                "environment": VIGIL_ENVIRONMENT,
+                "risk_score": risk_score,
+                "signature_hash": None,
+                "audit_event_id": agentshield_response.get('audit_event_id'),
+                "reasons": reasons,
+                "sig_verified": False,
+                "sig_key_id": None,
+                "input_hash": agentshield_response.get('input_hash'),
+                "timings": timings
+            })
         return jsonify({"error": {"message": "Blocked by policy", "code": 403, "request_id": request_id, "reasons": reasons}}), 403
 
     try:
@@ -903,25 +905,26 @@ def transparent_proxy():
         if claims.get("decision") and claims.get("decision") != "ALLOW":
             raise PolicyViolation("Invalid decision token decision claim")
     except Exception as e:
-        ship_log_async({
-            "request_id": request_id,
-            "timestamp": datetime.datetime.utcnow().isoformat(),
-            "seq_id": _seq_id,
-            "status": "BLOCK",
-            "agent_id": agent_id,
-            "tenant_id": tenant_id,
-            "policy_id": policy_id,
-            "policy_version": policy_version,
-            "environment": VIGIL_ENVIRONMENT,
-            "risk_score": risk_score,
-            "signature_hash": None,
-            "audit_event_id": agentshield_response.get('audit_event_id'),
-            "reasons": reasons + ["decision_token_invalid"],
-            "sig_verified": False,
-            "sig_key_id": None,
-            "input_hash": agentshield_response.get('input_hash'),
-            "timings": timings
-        })
+        if "ship_log_async" in globals():
+            ship_log_async({
+                "request_id": request_id,
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "seq_id": _seq_id,
+                "status": "BLOCK",
+                "agent_id": agent_id,
+                "tenant_id": tenant_id,
+                "policy_id": policy_id,
+                "policy_version": policy_version,
+                "environment": VIGIL_ENVIRONMENT,
+                "risk_score": risk_score,
+                "signature_hash": None,
+                "audit_event_id": agentshield_response.get('audit_event_id'),
+                "reasons": reasons + ["decision_token_invalid"],
+                "sig_verified": False,
+                "sig_key_id": None,
+                "input_hash": agentshield_response.get('input_hash'),
+                "timings": timings
+            })
         return jsonify({"error": {"message": "Invalid decision token", "code": 403, "request_id": request_id}}), 403
 
     # Enforce AgentShield decision (claims are already verified)
@@ -989,46 +992,47 @@ def transparent_proxy():
     # Priority 2: Add granular timings
     t_audit_ms = timings.get('t_total_ms', 0) - timings.get('t_agentshield_ms', 0)
     
-    ship_log_async({
-        "request_id": request_id,
-        "timestamp": datetime.datetime.utcnow().isoformat(),
-        "seq_id": _seq_id,
-        "status": action,
-        "agent_id": agent_id,
-        "tenant_id": tenant_id,
-        "policy_id": policy_id_from_decision or policy_id,  # NEW
-        "policy_version": policy_version,
-        "environment": VIGIL_ENVIRONMENT,
-        "risk_score": risk_score,
-        "signature_hash": signature_hash,
-        "audit_event_id": audit_event_id,
-        "reasons": reasons,
-        "sig_verified": sig_verified,
-        "sig_key_id": sig_key_id,
-        "policy_override": policy_override,
-        "error_code": error_code_from_decision_value if error_code_from_decision_value else None,  # NEW: structured error
-        "input_hash": input_hash,  # NEW: for audit trail
-        "agentshield_decision": agentshield_decision,  # Priority 2: Store original decision
-        # Vector scan results for audit trail
-        "vector_scan": {
-            "threat_detected": vector_scan_results.get("threat_detected", False),
-            "max_threat_score": vector_scan_results.get("max_score", 0.0),
-            "num_vector_matches": vector_scan_results.get("num_hits", 0),
-            "top_threats": vector_scan_results.get("vector_hits", [])[:3]  # Store top 3 for audit
-        },
-        "extraction_risk_score": (_compute_extraction_risk(embedding).get("extraction_risk_score") if embedding is not None else 0.0),
-        "distillation_risk": {
-            "is_risk": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("is_distillation_risk", False),
-            "score": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("risk_score", 0.0),
-            "reasons": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("reasons", []),
-        },
-        "timings": {
-            "t_vector_ms": timings.get('t_vector_ms', 0),
-            "t_agentshield_ms": timings.get('t_agentshield_ms', 0),
-            "t_audit_ms": round(t_audit_ms, 2),  # Priority 2: Granular timing
-            "t_total_ms": timings.get('t_total_ms', 0)
-        }
-    })
+    if "ship_log_async" in globals():
+        ship_log_async({
+            "request_id": request_id,
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "seq_id": _seq_id,
+            "status": action,
+            "agent_id": agent_id,
+            "tenant_id": tenant_id,
+            "policy_id": policy_id_from_decision or policy_id,  # NEW
+            "policy_version": policy_version,
+            "environment": VIGIL_ENVIRONMENT,
+            "risk_score": risk_score,
+            "signature_hash": signature_hash,
+            "audit_event_id": audit_event_id,
+            "reasons": reasons,
+            "sig_verified": sig_verified,
+            "sig_key_id": sig_key_id,
+            "policy_override": policy_override,
+            "error_code": error_code_from_decision_value if error_code_from_decision_value else None,  # NEW: structured error
+            "input_hash": input_hash,  # NEW: for audit trail
+            "agentshield_decision": agentshield_decision,  # Priority 2: Store original decision
+            # Vector scan results for audit trail
+            "vector_scan": {
+                "threat_detected": vector_scan_results.get("threat_detected", False),
+                "max_threat_score": vector_scan_results.get("max_score", 0.0),
+                "num_vector_matches": vector_scan_results.get("num_hits", 0),
+                "top_threats": vector_scan_results.get("vector_hits", [])[:3]  # Store top 3 for audit
+            },
+            "extraction_risk_score": (_compute_extraction_risk(embedding).get("extraction_risk_score") if embedding is not None else 0.0),
+            "distillation_risk": {
+                "is_risk": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("is_distillation_risk", False),
+                "score": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("risk_score", 0.0),
+                "reasons": (agentshield_response or {}).get("agentshield", {}).get("distillation_risk", {}).get("reasons", []),
+            },
+            "timings": {
+                "t_vector_ms": timings.get('t_vector_ms', 0),
+                "t_agentshield_ms": timings.get('t_agentshield_ms', 0),
+                "t_audit_ms": round(t_audit_ms, 2),  # Priority 2: Granular timing
+                "t_total_ms": timings.get('t_total_ms', 0)
+            }
+        })
 
     if action == 'BLOCK':
         response = (jsonify({"error": {"message": ", ".join(reasons) or "Blocked", "code": 403, "request_id": request_id, "signature_hash": signature_hash, "audit_event_id": audit_event_id}}), 403)

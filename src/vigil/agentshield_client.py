@@ -525,7 +525,7 @@ class AgentShieldClient:
             return cached
         self.metrics.record_cache_miss()
         
-        url = f"{self.base_url}/v1/enforce"
+        url = f"{self.base_url}/v1/enforce_token"
         cert = None
         if self.mtls_cert and self.mtls_key:
             cert = (self.mtls_cert, self.mtls_key)
