@@ -31,6 +31,7 @@ import socket
 import struct
 import hashlib
 import base64
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from flask import Flask, request, jsonify
@@ -308,6 +309,18 @@ def health():
         'service': 'agentshield-enclave-mock',
         'mode': 'development',
         'timestamp': datetime.utcnow().isoformat() + 'Z'
+    })
+
+
+@app.route('/v1/enforce', methods=['POST'])
+def enforce():
+    """Mock enforcement endpoint (fail-closed friendly)."""
+    _ = request.get_json(silent=True) or {}
+    return jsonify({
+        "decision": "ALLOW",
+        "decision_token": "mock-decision-token",
+        "expires_at": int(time.time()) + 60,
+        "reason": "mock-allow",
     })
 
 
