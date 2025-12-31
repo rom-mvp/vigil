@@ -1197,6 +1197,25 @@ def chat_completions():
             }
             try:
                 agentshield_decision = agent_shield_client.enforce(payload, full_prompt)
+                
+                # Verify attestation if present (AWS Nitro or Azure TDX)
+                if "attestation_document" in agentshield_decision:
+                    try:
+                        attestation_valid = agent_shield_client.verify_attestation(agentshield_decision)
+                        agentshield_decision['attestation_verified'] = attestation_valid
+                        if not attestation_valid:
+                            if AGENTSHIELD_REQUIRED:
+                                analysis['should_block'] = True
+                                analysis['attack_families'].append('invalid_attestation')
+                                analysis['risk_score'] = 1.0
+                            else:
+                                agentshield_decision['warn'] = 'attestation_invalid'
+                    except Exception as e:
+                        logger.warning(f"Attestation verification failed: {e}")
+                        agentshield_decision['attestation_verified'] = False
+                        if AGENTSHIELD_REQUIRED:
+                            raise
+                
                 if agentshield_decision.get('action') == 'BLOCK':
                     analysis['should_block'] = True
                     analysis['attack_families'].append('agentshield_block')

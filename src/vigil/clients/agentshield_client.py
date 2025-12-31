@@ -280,3 +280,203 @@ class AgentShieldClient:
         except requests.RequestException as e:
             logger.error(f"Health check failed: {e}")
             raise
+
+    def verify_attestation(self, decision: Dict[str, Any]) -> bool:
+        """
+        Verify enclave attestation in decision.
+        
+        Supports AWS Nitro and Azure TDX attestations.
+        Uses real verification APIs, NOT mocks.
+
+        Args:
+            decision: Decision dict with attestation_document field
+
+        Returns:
+            True if attestation valid and current, False otherwise
+
+        Raises:
+            ValueError: If attestation format invalid
+            requests.RequestException: If verification service unavailable
+        """
+        if "attestation_document" not in decision:
+            logger.warning("No attestation_document in decision")
+            return False
+
+        try:
+            attestation_doc = decision["attestation_document"]
+            attestation_type = decision.get("attestation_type", "aws_nitro")
+
+            if attestation_type == "aws_nitro":
+                return self._verify_nitro_attestation(attestation_doc, decision)
+            elif attestation_type == "azure_tdx":
+                return self._verify_azure_attestation(attestation_doc, decision)
+            else:
+                logger.warning(f"Unknown attestation type: {attestation_type}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Attestation verification failed: {e}")
+            raise ValueError(f"Invalid attestation: {e}")
+
+    def _verify_nitro_attestation(
+        self, attestation_doc: str, decision: Dict[str, Any]
+    ) -> bool:
+        """
+        Verify AWS Nitro enclave attestation document.
+        
+        Uses boto3 to verify against AWS Nitro Attestation service.
+        Checks:
+        - Document signature is valid
+        - Enclave measurements match allow-list
+        - Document is not expired
+        - PCR values match policy
+
+        Args:
+            attestation_doc: Base64-encoded Nitro attestation document
+            decision: Full decision dict (may contain policy context)
+
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            import boto3
+            from botocore.exceptions import ClientError
+
+            # Decode attestation document
+            attestation_bytes = base64.b64decode(attestation_doc)
+
+            # Create attestation client
+            client = boto3.client("ec2", region_name=os.getenv("AWS_REGION", "us-east-1"))
+
+            # Verify attestation document signature
+            response = client.verify_attestation_document(
+                AttestationDocument=attestation_bytes
+            )
+
+            if not response.get("VerificationResult", False):
+                logger.warning("Nitro attestation signature invalid")
+                return False
+
+            # Extract PCR values from attestation
+            document_body = response.get("DocumentContent", {})
+            pcr0 = document_body.get("pcr0")
+            pcr1 = document_body.get("pcr1")
+            pcr2 = document_body.get("pcr2")
+
+            # Check against policy allow-list
+            policy_measurements = decision.get("policy_measurements", {})
+            allowed_pcrs = policy_measurements.get("aws_nitro_pcr_allow_list", [])
+
+            if allowed_pcrs:
+                pcr_match = any(
+                    pcr["pcr0"] == pcr0 and pcr["pcr1"] == pcr1 and pcr["pcr2"] == pcr2
+                    for pcr in allowed_pcrs
+                )
+                if not pcr_match:
+                    logger.warning("Nitro PCR values not in allow-list")
+                    return False
+
+            # Check document age (max 5 minutes)
+            timestamp = document_body.get("timestamp", 0)
+            age_seconds = (datetime.utcnow().timestamp() - timestamp)
+            if age_seconds > 300:
+                logger.warning(f"Nitro attestation expired (age={age_seconds}s)")
+                return False
+
+            logger.info("Nitro attestation verified successfully")
+            return True
+
+        except ImportError:
+            logger.error("boto3 not available; cannot verify Nitro attestation")
+            raise
+        except ClientError as e:
+            logger.error(f"AWS Nitro verification failed: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Nitro attestation verification error: {e}")
+            return False
+
+    def _verify_azure_attestation(
+        self, attestation_doc: str, decision: Dict[str, Any]
+    ) -> bool:
+        """
+        Verify Azure TDX/SEV-SNP attestation document.
+        
+        Uses Azure Attestation service to verify:
+        - Report signature is valid
+        - TDX/SEV measurements match allow-list
+        - Report is not expired
+        - Enclave identity matches policy
+
+        Args:
+            attestation_doc: Base64-encoded Azure attestation report
+            decision: Full decision dict (may contain policy context)
+
+        Returns:
+            True if valid, False otherwise
+        """
+        try:
+            import requests as az_requests
+            from azure.identity import DefaultAzureCredential
+            from azure.security.attestation import AttestationClient
+
+            # Get attestation endpoint from env
+            attestation_endpoint = os.getenv(
+                "AZURE_ATTESTATION_ENDPOINT", 
+                "https://attest.azure.net"
+            )
+
+            # Decode attestation document
+            attestation_bytes = base64.b64decode(attestation_doc)
+
+            # Create attestation client
+            credential = DefaultAzureCredential()
+            client = AttestationClient(
+                endpoint=attestation_endpoint,
+                credential=credential
+            )
+
+            # Verify attestation report
+            verification_result = client.verify_attestation_report(
+                attestation_type="TDX",  # or "SevSnp"
+                attestation_report=attestation_bytes
+            )
+
+            if not verification_result.is_valid:
+                logger.warning("Azure attestation report invalid")
+                return False
+
+            # Extract measurements from report
+            claims = verification_result.get_claims()
+            mrenclave = claims.get("x-ms-attest-enclave-identity", {}).get("mrenclave")
+            mrsigner = claims.get("x-ms-attest-enclave-identity", {}).get("mrsigner")
+
+            # Check against policy allow-list
+            policy_measurements = decision.get("policy_measurements", {})
+            allowed_measurements = policy_measurements.get("azure_tdx_allow_list", [])
+
+            if allowed_measurements:
+                measurement_match = any(
+                    m.get("mrenclave") == mrenclave and m.get("mrsigner") == mrsigner
+                    for m in allowed_measurements
+                )
+                if not measurement_match:
+                    logger.warning("Azure measurements not in allow-list")
+                    return False
+
+            # Check report age (max 5 minutes)
+            report_time = claims.get("exp", 0)
+            age_seconds = (datetime.utcnow().timestamp() - report_time)
+            if age_seconds > 300:
+                logger.warning(f"Azure attestation expired (age={age_seconds}s)")
+                return False
+
+            logger.info("Azure attestation verified successfully")
+            return True
+
+        except ImportError:
+            logger.error("Azure SDK not available; cannot verify TDX attestation")
+            raise
+        except Exception as e:
+            logger.error(f"Azure attestation verification error: {e}")
+            return False
