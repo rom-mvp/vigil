@@ -1,7 +1,25 @@
-INFO     src.vigil.api_key_auth:api_key_auth.py:54 APIKeyAuth connected to Redis: redis://localhost:6379/0
-INFO     src.vigil.token_meter:token_meter.py:53 TokenMeter connected to Redis: redis://localhost:6379/0
-DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:9000
-WARNING  src.vigil.vector_engine:vector_engine.py:155 onnxruntime not installed: No module named 'onnxruntime'. Vector scanning will use mock embeddings.
-ERROR    src.vigil.vector_engine:vector_engine.py:201 Failed to load threat database: all the input array dimensions except for the concatenation axis must match exactly, but along dimension 1, the array at index 0 has size 373 and the array at index 1 has size 348
-INFO     src.vigil.vector_engine:vector_engine.py:222 Loaded default threat patterns (2)
-INFO     src.vigil.vector_engine:vector_engine.py:75 VectorScanner initialized on MockVectorMode with 2 threat patterns
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+DEBUG    vigil.clients.agentshield_client:agentshield_client.py:140 Fetching JWKS: http://localhost:9000/v1/keys/jwks
+DEBUG    vigil.clients.agentshield_client:agentshield_client.py:146 JWKS fetched and cached
+DEBUG    vigil.clients.agentshield_client:agentshield_client.py:135 JWKS from cache (age=0s)
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+DEBUG    vigil.clients.agentshield_client:agentshield_client.py:165 Fetching Merkle root: http://localhost:9000/v1/merkle/root
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+WARNING  vigil.clients.agentshield_client:agentshield_client.py:302 No attestation_document in decision
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+WARNING  vigil.clients.agentshield_client:agentshield_client.py:314 Unknown attestation type: unknown_tee
+INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
+ERROR    vigil.clients.agentshield_client:agentshield_client.py:318 Attestation verification failed: Invalid doc
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "GET /health HTTP/1.1" 200 105
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "POST /v1/chat/completions HTTP/1.1" 200 1345
