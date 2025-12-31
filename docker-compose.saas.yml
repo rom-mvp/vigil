@@ -73,10 +73,10 @@ services:
       - secure-mesh
     
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
-      interval: 15s
+      test: ["CMD", "python", "-c", "import requests; print(requests.get('http://localhost:9000/health').status_code)"]
+      interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
 
   # ═══════════════════════════════════════════════════════════
   # 3. REDIS - Policy Cache & Rate Limiting
