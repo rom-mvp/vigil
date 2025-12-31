@@ -9,6 +9,34 @@ It sits between your application and LLM providers (OpenAI, Anthropic, etc.) to 
 Vigil exposes an **OpenAI-compatible API** and can run standalone or as part of a broader AI control plane with AgentShield.
 
 ---
+## 🚀 Quick Start
+
+Get Vigil running in under 5 minutes:
+
+```bash
+git clone https://github.com/rom-mvp/vigil.git
+cd vigil
+docker compose -f docker-compose.saas.yml up --build -d
+
+# Wait for services to start
+sleep 10
+
+# Run smoke test
+python scripts/smoke_test.py
+```
+
+**What you get out of the box:**
+- ✅ Full enforcement pipeline with real Ed25519 signing
+- ✅ Policy rules that block prompt injection, PII, XSS, SQL injection
+- ✅ Merkle audit log with tamper detection
+- ✅ PII detection & redaction
+- ✅ API authentication
+- ✅ Fail-closed mode (blocks when backend unreachable)
+
+**See [QUICKSTART.md](QUICKSTART.md) for detailed setup & testing.**
+
+---
+
 
 ## What problem Vigil solves
 

@@ -2,6 +2,7 @@
 """
 Mock AgentShield server with Priority 1 fields implementation.
 This simulates the updated AgentShield backend for testing.
+NOW WITH REAL Ed25519 SIGNING AND BASIC POLICY RULES!
 """
 
 from flask import Flask, request, jsonify
@@ -12,9 +13,35 @@ import base64
 import os
 from collections import defaultdict, Counter
 import datetime
+import re
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
 
 app = Flask(__name__)
 START_TIME = time.time()
+
+# REAL Ed25519 KEY GENERATION (persistent across requests, but regenerates on restart)
+PRIVATE_KEY = ed25519.Ed25519PrivateKey.generate()
+PUBLIC_KEY = PRIVATE_KEY.public_key()
+
+# Export public key for JWKS
+PUBLIC_KEY_BYTES = PUBLIC_KEY.public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw
+)
+
+# POLICY RULES - Basic threat detection patterns
+BLOCK_PATTERNS = [
+    (r"(?i)system:", "prompt-injection-system", 0.9),
+    (r"(?i)ignore previous", "prompt-injection-override", 0.95),
+    (r"(?i)</system>", "prompt-injection-xml", 0.9),
+    (r"(?i)ignore all.*instruction", "prompt-injection-instruction-override", 0.95),
+    (r"\b[0-9]{13,19}\b", "credit-card-number", 0.99),  # 13-19 digits = likely credit card
+    (r"\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b", "ssn-pattern", 0.99),  # SSN format
+    (r"(?i)<script>", "xss-attempt", 0.98),
+    (r"(?i)DROP\s+TABLE", "sql-injection", 0.98),
+    (r"(?i)exec\s*\(", "code-execution", 0.95),
+]
 
 # In-memory analytics store (in production, use Redis/Database)
 analytics_store = {
@@ -25,6 +52,30 @@ analytics_store = {
     "risk_scores": [],
     "latencies": []
 }
+
+
+def evaluate_threat(messages):
+    """
+    Evaluate messages for threats using pattern matching.
+    Returns (action, risk_score, reasons)
+    """
+    all_text = " ".join([msg.get("content", "") for msg in messages if isinstance(msg, dict)])
+    
+    reasons = []
+    max_risk_score = 0.0
+    
+    for pattern, reason, risk_score in BLOCK_PATTERNS:
+        if re.search(pattern, all_text):
+            reasons.append(reason)
+            max_risk_score = max(max_risk_score, risk_score)
+    
+    # Decision logic
+    if max_risk_score >= 0.8:
+        return "BLOCK", max_risk_score, reasons
+    elif max_risk_score >= 0.5:
+        return "SANITIZE", max_risk_score, reasons
+    else:
+        return "ALLOW", max(max_risk_score, 0.05), reasons if reasons else ["clean"]
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -43,14 +94,17 @@ def health():
 
 @app.route('/v1/keys/jwks', methods=['GET'])
 def jwks():
-    """Return mock JWKS keys."""
+    """Return REAL JWKS keys with Ed25519 public key."""
+    # Encode public key bytes as base64url (RFC 8037 format)
+    x_coord = base64.urlsafe_b64encode(PUBLIC_KEY_BYTES).decode().rstrip('=')
+    
     return jsonify({
         "keys": [
             {
                 "kty": "OKP",
                 "crv": "Ed25519",
                 "kid": "k1",
-                "x": "mock-public-key-data",
+                "x": x_coord,
                 "use": "sig"
             }
         ]
@@ -58,7 +112,7 @@ def jwks():
 
 @app.route('/v1/enforce', methods=['POST'])
 def enforce():
-    """Mock enforcement endpoint with Priority 1 fields."""
+    """Enforcement endpoint with REAL Ed25519 signing and policy evaluation."""
     request_data = request.json
     
     # Extract request fields
@@ -73,21 +127,24 @@ def enforce():
     environment = request_data.get("environment", "test")
     messages = request_data.get("messages", [])
     
-    # Make decision (always ALLOW for testing)
+    # 🛡️ EVALUATE THREAT using policy rules
+    action, risk_score, reasons = evaluate_threat(messages)
+    
+    # Make decision
     decision = {
-        "schema_version": "as_decision_v1",  # ⭐ NEW
-        "action": "ALLOW",
-        "risk_score": 0.05,
-        "reasons": ["mock-allow"],
+        "schema_version": "as_decision_v1",
+        "action": action,  # Now can be BLOCK, SANITIZE, or ALLOW
+        "risk_score": risk_score,
+        "reasons": reasons,
         "issued_at": int(time.time()),
-        "ttl_ms": ttl_ms,  # ⭐ NEW - Echo back or use default
+        "ttl_ms": ttl_ms,
         "context_echo": {
             "request_id": request_id,
             "tenant_id": tenant_id,
             "agent_id": agent_id,
-            "policy_id": policy_id,  # ⭐ NEW - Echo back
+            "policy_id": policy_id,
             "policy_version": policy_version,
-            "input_hash": input_hash,  # ⭐ NEW - Echo back (critical!)
+            "input_hash": input_hash,
             "timestamp_ms": timestamp_ms,
             "environment": environment
         },
@@ -107,10 +164,10 @@ def enforce():
     canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(',', ':'))
     payload_hash = hashlib.sha256(canonical_json.encode()).digest()
     
-    # Mock signature (in real system, this would be Ed25519 signature)
-    mock_signature = hashlib.sha256(f"mock-sig-{canonical_json}".encode()).digest()
+    # 🔐 REAL Ed25519 SIGNATURE
+    signature_bytes = PRIVATE_KEY.sign(canonical_json.encode())
     
-    decision["signature"] = base64.urlsafe_b64encode(mock_signature).decode().rstrip('=')
+    decision["signature"] = base64.urlsafe_b64encode(signature_bytes).decode().rstrip('=')
     decision["signature_key_id"] = "k1"
     decision["canonical_payload_hash"] = base64.urlsafe_b64encode(payload_hash).decode().rstrip('=')
     
@@ -125,9 +182,21 @@ def enforce():
     })
     analytics_store["decisions"][decision["action"]] += 1
     analytics_store["tenants"][tenant_id]["count"] += 1
-    analytics_store["tenants"][tenant_id][decision["action"].lower()] += 1
+    
+    # Track blocked/allowed per tenant
+    if action == "BLOCK":
+        analytics_store["tenants"][tenant_id]["blocked"] += 1
+    else:
+        analytics_store["tenants"][tenant_id]["allowed"] += 1
+    
     analytics_store["agents"][agent_id]["count"] += 1
-    analytics_store["agents"][agent_id][decision["action"].lower()] += 1
+    
+    # Track blocked/allowed per agent
+    if action == "BLOCK":
+        analytics_store["agents"][agent_id]["blocked"] += 1
+    else:
+        analytics_store["agents"][agent_id]["allowed"] += 1
+    
     analytics_store["risk_scores"].append(decision["risk_score"])
     
     # Keep only last 1000 requests in memory
@@ -136,11 +205,10 @@ def enforce():
     if len(analytics_store["risk_scores"]) > 1000:
         analytics_store["risk_scores"] = analytics_store["risk_scores"][-1000:]
     
-    print(f"✅ Mock AgentShield: Processed request {request_id}")
-    print(f"   - schema_version: {decision['schema_version']}")
-    print(f"   - ttl_ms: {decision['ttl_ms']}")
-    print(f"   - policy_id: {policy_id}")
-    print(f"   - input_hash: {input_hash[:32]}...")
+    print(f"{'🛡️' if action == 'BLOCK' else '✅'} Mock AgentShield: {action} request {request_id}")
+    print(f"   - Risk Score: {risk_score}")
+    print(f"   - Reasons: {', '.join(reasons)}")
+    print(f"   - Policy: {policy_id}")
     
     return jsonify(decision)
 
@@ -243,7 +311,14 @@ def analytics_threats():
 
 if __name__ == '__main__':
     print("🛡️  Mock AgentShield running on http://0.0.0.0:9000")
-    print("   (With Priority 1 fields: schema_version, ttl_ms, policy_id, input_hash)")
+    print("   WITH REAL Ed25519 SIGNING + BASIC POLICY ENFORCEMENT!")
+    print("")
+    print("📋 Policy Rules Loaded:")
+    for pattern, reason, risk_score in BLOCK_PATTERNS:
+        print(f"   - {reason} (risk: {risk_score})")
+    print("")
+    print("🔐 Crypto:")
+    print(f"   - Ed25519 public key: {PUBLIC_KEY_BYTES.hex()[:32]}...")
     print("")
     print("📊 Analytics Endpoints:")
     print("   GET  /analytics/dashboard  - Comprehensive dashboard data")
