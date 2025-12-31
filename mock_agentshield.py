@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Mock AgentShield server with Priority 1 fields implementation.
-This simulates the updated AgentShield backend for testing.
-NOW WITH REAL Ed25519 SIGNING AND BASIC POLICY RULES!
+Mock AgentShield server upgraded with:
+- Real Ed25519 signing + JWKS
+- Policy loading from agentshield_policy.json
+- Key rotation, decision expiry enforcement, replay protection
+- TEE hooks: sealed key persistence + optional attestation gating
 """
 
 from flask import Flask, request, jsonify
@@ -11,37 +13,172 @@ import hashlib
 import json
 import base64
 import os
-from collections import defaultdict, Counter
+from collections import defaultdict, Counter, deque
 import datetime
 import re
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
 
+# Configuration (env overrides)
+POLICY_PATH = os.environ.get("POLICY_PATH", "agentshield_policy.json")
+KEY_ROTATION_SECONDS = int(os.environ.get("KEY_ROTATION_SECONDS", "86400"))  # default 24h
+DECISION_TTL_MS_MAX = int(os.environ.get("DECISION_TTL_MS_MAX", "300000"))   # default 5 minutes
+REPLAY_WINDOW_SECONDS = int(os.environ.get("REPLAY_WINDOW_SECONDS", "300"))   # default 5 minutes
+SEAL_KEY_PATH = os.environ.get("SEAL_KEY_PATH", "/tmp/agentshield_sealed_ed25519.key")
+REQUIRE_ATTESTATION = os.environ.get("REQUIRE_ATTESTATION", "false").lower() == "true"
+ATTESTATION_MEASUREMENT = os.environ.get("ATTESTATION_MEASUREMENT", "")
+
 app = Flask(__name__)
 START_TIME = time.time()
 
-# REAL Ed25519 KEY GENERATION (persistent across requests, but regenerates on restart)
-PRIVATE_KEY = ed25519.Ed25519PrivateKey.generate()
-PUBLIC_KEY = PRIVATE_KEY.public_key()
+def load_or_create_sealed_key(path: str):
+    """Load Ed25519 private key from sealed storage or create one."""
+    try:
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                raw = base64.urlsafe_b64decode(f.read())
+            return ed25519.Ed25519PrivateKey.from_private_bytes(raw)
+    except Exception:
+        pass  # Fall back to new key
 
-# Export public key for JWKS
-PUBLIC_KEY_BYTES = PUBLIC_KEY.public_bytes(
-    encoding=serialization.Encoding.Raw,
-    format=serialization.PublicFormat.Raw
-)
+    key = ed25519.Ed25519PrivateKey.generate()
+    try:
+        raw = key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        with open(path, "wb") as f:
+            f.write(base64.urlsafe_b64encode(raw))
+    except Exception:
+        # If sealing fails, continue with in-memory key only
+        pass
+    return key
 
-# POLICY RULES - Basic threat detection patterns
-BLOCK_PATTERNS = [
+
+def new_key_record(kid: str, private_key: ed25519.Ed25519PrivateKey):
+    public_key = private_key.public_key()
+    public_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+    return {
+        "kid": kid,
+        "private_key": private_key,
+        "public_bytes": public_bytes,
+        "created_at": time.time(),
+    }
+
+
+# KEY RING WITH ROTATION
+KEY_RING = []
+LAST_ROTATION = time.time()
+
+
+def initialize_keys():
+    sealed_key = load_or_create_sealed_key(SEAL_KEY_PATH)
+    base_kid = "k1"
+    KEY_RING.clear()
+    KEY_RING.append(new_key_record(base_kid, sealed_key))
+
+
+def active_key():
+    # Latest key in ring
+    return KEY_RING[-1]
+
+
+def maybe_rotate_keys():
+    global LAST_ROTATION
+    now = time.time()
+    if now - LAST_ROTATION < KEY_ROTATION_SECONDS:
+        return
+    kid = f"k{int(now)}"
+    KEY_RING.append(new_key_record(kid, ed25519.Ed25519PrivateKey.generate()))
+    LAST_ROTATION = now
+    # Cap key ring to last 5 keys
+    if len(KEY_RING) > 5:
+        del KEY_RING[0]
+
+
+# POLICY RULES - loaded from file with safe defaults
+DEFAULT_BLOCK_PATTERNS = [
     (r"(?i)system:", "prompt-injection-system", 0.9),
     (r"(?i)ignore previous", "prompt-injection-override", 0.95),
     (r"(?i)</system>", "prompt-injection-xml", 0.9),
     (r"(?i)ignore all.*instruction", "prompt-injection-instruction-override", 0.95),
-    (r"\b[0-9]{13,19}\b", "credit-card-number", 0.99),  # 13-19 digits = likely credit card
-    (r"\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b", "ssn-pattern", 0.99),  # SSN format
+    (r"\b[0-9]{13,19}\b", "credit-card-number", 0.99),
+    (r"\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b", "ssn-pattern", 0.99),
     (r"(?i)<script>", "xss-attempt", 0.98),
     (r"(?i)DROP\s+TABLE", "sql-injection", 0.98),
     (r"(?i)exec\s*\(", "code-execution", 0.95),
 ]
+
+POLICY_RULES = DEFAULT_BLOCK_PATTERNS[:]
+TEE_POLICY = {
+    "sgx_mrenclave": [],
+    "sgx_mrsigner": [],
+    "sev_measurement": [],
+    "tdx_mrtd": [],
+    "azure_measurement": [],
+}
+POLICY_VERSION = 1
+POLICY_LOADED_AT = time.time()
+
+
+def load_policy():
+    global POLICY_RULES, POLICY_VERSION, POLICY_LOADED_AT, TEE_POLICY
+    try:
+        with open(POLICY_PATH, "r") as f:
+            data = json.load(f)
+        POLICY_RULES = []
+        for rule in data.get("rules", []):
+            POLICY_RULES.append(
+                (
+                    rule.get("pattern", ""),
+                    rule.get("reason", "unspecified"),
+                    float(rule.get("risk_score", 0.5)),
+                )
+            )
+        if not POLICY_RULES:
+            POLICY_RULES = DEFAULT_BLOCK_PATTERNS[:]
+        TEE_POLICY = {
+            "sgx_mrenclave": data.get("sgx_mrenclave", []),
+            "sgx_mrsigner": data.get("sgx_mrsigner", []),
+            "sev_measurement": data.get("sev_measurement", []),
+            "tdx_mrtd": data.get("tdx_mrtd", []),
+            "azure_measurement": data.get("azure_measurement", []),
+        }
+        POLICY_VERSION += 1
+        POLICY_LOADED_AT = time.time()
+    except Exception:
+        POLICY_RULES = DEFAULT_BLOCK_PATTERNS[:]
+
+
+def validate_attestation(measurement: str) -> bool:
+    # Accept all if no expectations set
+    if not any(TEE_POLICY.values()):
+        return True
+    allowed = set(
+        TEE_POLICY.get("sgx_mrenclave", [])
+        + TEE_POLICY.get("sgx_mrsigner", [])
+        + TEE_POLICY.get("sev_measurement", [])
+        + TEE_POLICY.get("tdx_mrtd", [])
+        + TEE_POLICY.get("azure_measurement", [])
+    )
+    if not allowed:
+        return True
+    if not measurement:
+        return False
+    return measurement in allowed
+
+
+# Initialize keyring and policy on startup
+initialize_keys()
+load_policy()
+
+# Replay protection
+REPLAY_CACHE = deque()
+REPLAY_INDEX = {}
 
 # In-memory analytics store (in production, use Redis/Database)
 analytics_store = {
@@ -64,8 +201,8 @@ def evaluate_threat(messages):
     reasons = []
     max_risk_score = 0.0
     
-    for pattern, reason, risk_score in BLOCK_PATTERNS:
-        if re.search(pattern, all_text):
+    for pattern, reason, risk_score in POLICY_RULES:
+        if pattern and re.search(pattern, all_text):
             reasons.append(reason)
             max_risk_score = max(max_risk_score, risk_score)
     
@@ -77,55 +214,108 @@ def evaluate_threat(messages):
     else:
         return "ALLOW", max(max_risk_score, 0.05), reasons if reasons else ["clean"]
 
+
+def purge_replay_cache(now: float):
+    while REPLAY_CACHE and now - REPLAY_CACHE[0][1] > REPLAY_WINDOW_SECONDS:
+        req_id, _ts = REPLAY_CACHE.popleft()
+        REPLAY_INDEX.pop(req_id, None)
+
+
+def is_replay(request_id: str, now: float) -> bool:
+    if not request_id:
+        return False
+    purge_replay_cache(now)
+    ts = REPLAY_INDEX.get(request_id)
+    if ts and now - ts <= REPLAY_WINDOW_SECONDS:
+        return True
+    REPLAY_CACHE.append((request_id, now))
+    REPLAY_INDEX[request_id] = now
+    if len(REPLAY_CACHE) > 10000:
+        old_id, _ = REPLAY_CACHE.popleft()
+        REPLAY_INDEX.pop(old_id, None)
+    return False
+
 @app.route('/health', methods=['GET'])
 def health():
     uptime = round(time.time() - START_TIME, 2)
+    attestation_ok = validate_attestation(ATTESTATION_MEASUREMENT)
+    ak = active_key()
     return jsonify({
         "status": "ok",
         "service": "mock-agentshield",
         "uptime_seconds": uptime,
         "decision_signing": {
             "schema_version": "as_decision_v1",
-            "key_id": "k1",
-            "ready": True
+            "key_id": ak["kid"],
+            "ready": True,
+            "rotation_seconds": KEY_ROTATION_SECONDS,
+            "keys_available": len(KEY_RING)
+        },
+        "policy": {
+            "version": POLICY_VERSION,
+            "loaded_at": POLICY_LOADED_AT,
+            "rule_count": len(POLICY_RULES)
+        },
+        "replay_protection": {
+            "window_seconds": REPLAY_WINDOW_SECONDS,
+            "cache_size": len(REPLAY_CACHE)
+        },
+        "attestation": {
+            "required": REQUIRE_ATTESTATION,
+            "measurement": ATTESTATION_MEASUREMENT,
+            "verified": attestation_ok
         },
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z"
     })
 
 @app.route('/v1/keys/jwks', methods=['GET'])
 def jwks():
-    """Return REAL JWKS keys with Ed25519 public key."""
-    # Encode public key bytes as base64url (RFC 8037 format)
-    x_coord = base64.urlsafe_b64encode(PUBLIC_KEY_BYTES).decode().rstrip('=')
-    
-    return jsonify({
-        "keys": [
-            {
-                "kty": "OKP",
-                "crv": "Ed25519",
-                "kid": "k1",
-                "x": x_coord,
-                "use": "sig"
-            }
-        ]
-    })
+    """Return REAL JWKS keys with Ed25519 public keys (all active keys)."""
+    keys = []
+    for record in KEY_RING:
+        x_coord = base64.urlsafe_b64encode(record["public_bytes"]).decode().rstrip('=')
+        keys.append({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "kid": record["kid"],
+            "x": x_coord,
+            "use": "sig"
+        })
+    return jsonify({"keys": keys})
 
 @app.route('/v1/enforce', methods=['POST'])
 def enforce():
     """Enforcement endpoint with REAL Ed25519 signing and policy evaluation."""
     request_data = request.json
+    now = time.time()
+    maybe_rotate_keys()
+    attestation_ok = validate_attestation(ATTESTATION_MEASUREMENT)
+    if REQUIRE_ATTESTATION and not attestation_ok:
+        return jsonify({
+            "error": "attestation_failed",
+            "message": "Attestation not verified; refusing to issue decisions"
+        }), 503
     
     # Extract request fields
     request_id = request_data.get("request_id", "unknown")
     tenant_id = request_data.get("tenant_id", "unknown")
     agent_id = request_data.get("agent_id", "unknown")
     policy_id = request_data.get("policy_id", "default-policy")
-    policy_version = request_data.get("policy_version", 1)
+    policy_version = request_data.get("policy_version", POLICY_VERSION)
     input_hash = request_data.get("input_hash", "")
     timestamp_ms = request_data.get("timestamp_ms", int(time.time() * 1000))
-    ttl_ms = request_data.get("ttl_ms", 300000)
+    ttl_ms = min(int(request_data.get("ttl_ms", 300000)), DECISION_TTL_MS_MAX)
     environment = request_data.get("environment", "test")
     messages = request_data.get("messages", [])
+    expires_at_ms = int(now * 1000) + ttl_ms
+
+    # Replay protection
+    if is_replay(request_id, now):
+        return jsonify({
+            "error": "replay_detected",
+            "message": "Duplicate request_id within replay window",
+            "replay_window_seconds": REPLAY_WINDOW_SECONDS
+        }), 409
     
     # 🛡️ EVALUATE THREAT using policy rules
     action, risk_score, reasons = evaluate_threat(messages)
@@ -136,8 +326,9 @@ def enforce():
         "action": action,  # Now can be BLOCK, SANITIZE, or ALLOW
         "risk_score": risk_score,
         "reasons": reasons,
-        "issued_at": int(time.time()),
+        "issued_at": int(now),
         "ttl_ms": ttl_ms,
+        "expires_at_ms": expires_at_ms,
         "context_echo": {
             "request_id": request_id,
             "tenant_id": tenant_id,
@@ -158,17 +349,19 @@ def enforce():
         "reasons": decision["reasons"],
         "context_echo": decision["context_echo"],
         "audit_event_id": decision["audit_event_id"],
-        "issued_at": decision["issued_at"]
+        "issued_at": decision["issued_at"],
+        "expires_at_ms": decision["expires_at_ms"],
     }
     
     canonical_json = json.dumps(canonical_payload, sort_keys=True, separators=(',', ':'))
     payload_hash = hashlib.sha256(canonical_json.encode()).digest()
     
     # 🔐 REAL Ed25519 SIGNATURE
-    signature_bytes = PRIVATE_KEY.sign(canonical_json.encode())
+    ak = active_key()
+    signature_bytes = ak["private_key"].sign(canonical_json.encode())
     
     decision["signature"] = base64.urlsafe_b64encode(signature_bytes).decode().rstrip('=')
-    decision["signature_key_id"] = "k1"
+    decision["signature_key_id"] = ak["kid"]
     decision["canonical_payload_hash"] = base64.urlsafe_b64encode(payload_hash).decode().rstrip('=')
     
     # Store analytics data
@@ -208,7 +401,10 @@ def enforce():
     print(f"{'🛡️' if action == 'BLOCK' else '✅'} Mock AgentShield: {action} request {request_id}")
     print(f"   - Risk Score: {risk_score}")
     print(f"   - Reasons: {', '.join(reasons)}")
-    print(f"   - Policy: {policy_id}")
+    print(f"   - Policy: {policy_id} v{policy_version}")
+    print(f"   - TTL(ms): {ttl_ms} (expires_at_ms={expires_at_ms})")
+    if REQUIRE_ATTESTATION:
+        print(f"   - Attestation verified: {attestation_ok}")
     
     return jsonify(decision)
 
@@ -311,14 +507,15 @@ def analytics_threats():
 
 if __name__ == '__main__':
     print("🛡️  Mock AgentShield running on http://0.0.0.0:9000")
-    print("   WITH REAL Ed25519 SIGNING + BASIC POLICY ENFORCEMENT!")
+    print("   WITH REAL Ed25519 SIGNING + POLICY ENFORCEMENT + ROTATION")
     print("")
     print("📋 Policy Rules Loaded:")
-    for pattern, reason, risk_score in BLOCK_PATTERNS:
+    for pattern, reason, risk_score in POLICY_RULES:
         print(f"   - {reason} (risk: {risk_score})")
     print("")
     print("🔐 Crypto:")
-    print(f"   - Ed25519 public key: {PUBLIC_KEY_BYTES.hex()[:32]}...")
+    ak = active_key()
+    print(f"   - Active key: {ak['kid']} (rotates every {KEY_ROTATION_SECONDS}s)")
     print("")
     print("📊 Analytics Endpoints:")
     print("   GET  /analytics/dashboard  - Comprehensive dashboard data")

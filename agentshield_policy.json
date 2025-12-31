@@ -1,19 +1,33 @@
 {
+  "_comment": "Default policy used by mock AgentShield backend. Add your production measurements and rules before deploying.",
+  "rules": [
+    {"id": "rule-1", "pattern": "(?i)system:", "action": "block", "reason": "prompt-injection-system", "risk_score": 0.90},
+    {"id": "rule-2", "pattern": "(?i)ignore previous", "action": "block", "reason": "prompt-injection-override", "risk_score": 0.95},
+    {"id": "rule-3", "pattern": "(?i)</system>", "action": "block", "reason": "prompt-injection-xml", "risk_score": 0.90},
+    {"id": "rule-4", "pattern": "\\b[0-9]{13,19}\\b", "action": "block", "reason": "credit-card-number", "risk_score": 0.99},
+    {"id": "rule-5", "pattern": "\\b[0-9]{3}-[0-9]{2}-[0-9]{4}\\b", "action": "block", "reason": "ssn-pattern", "risk_score": 0.99},
+    {"id": "rule-6", "pattern": "(?i)<script>", "action": "block", "reason": "xss-attempt", "risk_score": 0.98},
+    {"id": "rule-7", "pattern": "(?i)DROP\\s+TABLE", "action": "block", "reason": "sql-injection", "risk_score": 0.98},
+    {"id": "rule-8", "pattern": "(?i)exec\\s*\\(", "action": "block", "reason": "code-execution", "risk_score": 0.95}
+  ],
   "sgx_mrenclave": [
-    "// Add allowed SGX MRENCLAVE values here",
-    "// Example: '3d4aa3e42cb6a66879b3a4b7e1a9e14c...'"
+    "// Example SGX MRENCLAVE measurement hash",
+    "// 3d4aa3e42cb6a66879b3a4b7e1a9e14cdeadbeefdeadbeefdeadbeefdeadbeef"
   ],
   "sgx_mrsigner": [
-    "// Add allowed SGX MRSIGNER values here"
+    "// Example SGX MRSIGNER hash",
+    "// 1f2d3c4b5a69788776655443322110ffeeddccbbaa99887766554433221100ff"
   ],
   "sev_measurement": [
-    "// Add allowed SEV-SNP measurement values here"
+    "// Example SEV-SNP measurement",
+    "// c0ffee0000000000000000000000000000000000000000000000000000000000"
   ],
   "tdx_mrtd": [
-    "// Add allowed TDX MRTD values here"
+    "// Example TDX MRTD",
+    "// ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   ],
   "azure_measurement": [
-    "// Add allowed Azure CC measurements here"
-  ],
-  "_comment": "Empty arrays accept all measurements. Add specific hashes to restrict."
+    "// Example Azure CC measurement",
+    "// aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
 }
