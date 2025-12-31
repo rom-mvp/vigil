@@ -9,26 +9,30 @@ services:
   #   4. Add environment vars for HARDWARE_BACKEND, DATABASE_URL, etc.
   agentshield:
     build:
-      context: .                           # Change to ./services/agentshield for real backend
-      dockerfile: Dockerfile.agentshield   # Change to Dockerfile or Dockerfile.prod for real
+      context: ./services/agentshield      # FIXED: Points to real AgentShield repo
+      dockerfile: Dockerfile.prod          # FIXED: Use production Dockerfile
     container_name: vigil-agentshield
     ports:
       - "9000:9000"
     environment:
-      # For MOCK AgentShield:
-      - FLASK_APP=mock_agentshield.py
-      - FLASK_ENV=production
+      # FIXED: Using real AgentShield environment (mock references removed)
+      - APP_ENV=prod
+      - HARDWARE_BACKEND=aws_nitro         # Enable AWS Nitro attestation verification
+      - AWS_REGION=us-east-1
       - PORT=9000
       
-      # For REAL AgentShield (uncomment when switching):
-      # - APP_ENV=prod
-      # - HARDWARE_BACKEND=aws_nitro                    # or azure_tdx
-      # - REDIS_URL=redis://redis:6379
-      # - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentshield
-      # - AGENTSHIELD_SIGNING_KEY_PATH=/app/keys/signing.key
-      # - REQUIRE_ATTESTATION=false                    # Set to true on Nitro/TDX hosts
+      # Database configuration (for real backend)
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentshield
+      
+      # Security configuration
+      - AGENTSHIELD_SIGNING_KEY_B64=${AGENTSHIELD_SIGNING_KEY_B64:-}
+      - REQUIRE_ATTESTATION=false          # Set to true on Nitro/TDX hosts
     networks:
       - vigil-network
+    depends_on:
+      - redis
+      - postgres
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 10s
@@ -36,13 +40,9 @@ services:
       retries: 3
       start_period: 5s
     restart: unless-stopped
-    # For real backend with persistent storage:
-    # volumes:
-    #   - agentshield-keys:/app/keys
-    #   - agentshield-logs:/app/logs
-    # depends_on:
-    #   - redis
-    #   - postgres
+    volumes:
+      - agentshield-keys:/app/keys
+      - agentshield-logs:/app/logs
 
   # Vigil security gateway
   vigil:
@@ -129,39 +129,42 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # Optional: Redis and PostgreSQL for real AgentShield
-  # Uncomment when switching to real backend
-  # redis:
-  #   image: redis:7-alpine
-  #   container_name: vigil-redis
-  #   ports:
-  #     - "6379:6379"
-  #   networks:
-  #     - vigil-network
-  #   restart: unless-stopped
+  # Redis cache (required for real AgentShield)
+  redis:
+    image: redis:7-alpine
+    container_name: vigil-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - vigil-network
+    restart: unless-stopped
 
-  # postgres:
-  #   image: postgres:15
-  #   container_name: vigil-postgres
-  #   ports:
-  #     - "5432:5432"
-  #   environment:
-  #     - POSTGRES_DB=agentshield
-  #     - POSTGRES_USER=postgres
-  #     - POSTGRES_PASSWORD=postgres
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   networks:
-  #     - vigil-network
-  #   restart: unless-stopped
+  # PostgreSQL database (required for real AgentShield)
+  postgres:
+    image: postgres:15
+    container_name: vigil-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=agentshield
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - vigil-network
+    restart: unless-stopped
 
 volumes:
   vigil-logs:
     driver: local
-  # postgres_data:
-  #   driver: local
-  # agentshield-keys:
-  #   driver: local
-  # agentshield-logs:
-  #   driver: local
+  postgres_data:
+    driver: local
+  agentshield-keys:
+    driver: local
+  agentshield-logs:
+    driver: local
+
+networks:
+  vigil-network:
     driver: bridge
