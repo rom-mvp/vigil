@@ -21,8 +21,12 @@ import base64
 import hashlib
 import requests
 from datetime import datetime
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
+import uuid
 from collections import defaultdict
+
+# Import AgentShield client
+from vigil.clients import AgentShieldClient as RealAgentShieldClient
 
 # Optional vision/text safety deps
 try:
@@ -76,6 +80,16 @@ except Exception as e:
     print(f"⚠ Redis not available: {e}")
     redis_client = None
 
+# AgentShield integration settings
+AGENTSHIELD_URL = os.getenv("AGENTSHIELD_URL", "").strip()
+AGENTSHIELD_JWKS_URL = os.getenv("AGENTSHIELD_JWKS_URL", "").strip()
+AGENTSHIELD_TIMEOUT_MS = int(os.getenv("AGENTSHIELD_TIMEOUT_MS", "3000"))
+AGENTSHIELD_REQUIRE_SIGNED = os.getenv("AGENTSHIELD_REQUIRE_SIGNED", "false").lower() == "true"
+AGENTSHIELD_REQUIRED = os.getenv("AGENTSHIELD_REQUIRED", "false").lower() == "true"
+AGENTSHIELD_DECISION_MAX_AGE_MS = int(os.getenv("AGENTSHIELD_DECISION_MAX_AGE_MS", "300000"))
+AGENTSHIELD_CACHE_TTL_SECONDS = int(os.getenv("AGENTSHIELD_CACHE_TTL_SECONDS", "300"))
+AGENTSHIELD_CACHE_SIM_THRESHOLD = float(os.getenv("AGENTSHIELD_CACHE_SIM_THRESHOLD", "0.92"))
+
 # Embedding model for semantic guardrails
 EMBEDDING_MODEL = None
 BAD_CONCEPTS = [
@@ -111,6 +125,149 @@ def _init_embedding_model():
         BAD_CONCEPT_EMBEDDINGS = None
 
 _init_embedding_model()
+
+
+def _b64url_decode(data: str) -> bytes:
+    padding = '=' * ((4 - len(data) % 4) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+
+class SemanticDecisionCache:
+    def __init__(self, ttl_seconds: int, sim_threshold: float):
+        self.ttl = ttl_seconds
+        self.sim_threshold = sim_threshold
+        self.entries: List[Dict[str, Any]] = []
+
+    def _clean(self):
+        now = time.time()
+        self.entries = [e for e in self.entries if e['expires_at'] > now]
+        if len(self.entries) > 200:
+            self.entries = self.entries[-200:]
+
+    def _embed(self, text: str):
+        if EMBEDDING_MODEL and np is not None:
+            return EMBEDDING_MODEL.encode([text], normalize_embeddings=True)[0]
+        # Fallback: simple bag-of-words vector using hashing trick
+        tokens = text.lower().split()
+        vec = defaultdict(float)
+        for t in tokens:
+            vec[hash(t) % 2048] += 1.0
+        # Convert to dense list for cosine
+        return vec
+
+    def _similarity(self, a, b) -> float:
+        if EMBEDDING_MODEL and np is not None:
+            return float(np.dot(a, b))
+        # Cosine for sparse dicts
+        dot = 0.0
+        for k, v in a.items():
+            dot += v * b.get(k, 0.0)
+        norm_a = math.sqrt(sum(v * v for v in a.values())) or 1.0
+        norm_b = math.sqrt(sum(v * v for v in b.values())) or 1.0
+        return dot / (norm_a * norm_b)
+
+    def lookup(self, text: str) -> Optional[Dict[str, Any]]:
+        self._clean()
+        if not text:
+            return None
+        vec = self._embed(text)
+        best = None
+        best_sim = 0.0
+        for entry in self.entries:
+            sim = self._similarity(vec, entry['vec'])
+            if sim > best_sim:
+                best_sim = sim
+                best = entry
+        if best and best_sim >= self.sim_threshold:
+            return best
+        return None
+
+    def store(self, text: str, decision: Dict[str, Any], ttl: Optional[int] = None):
+        if not text:
+            return
+        expires = time.time() + (ttl if ttl is not None else self.ttl)
+        self.entries.append({
+            'vec': self._embed(text),
+            'decision': decision,
+            'expires_at': expires
+        })
+        self._clean()
+
+
+class AgentShieldClient:
+    """
+    Wrapper around RealAgentShieldClient with semantic caching.
+    Maintains compatibility with existing code.
+    """
+    def __init__(self, base_url: str, jwks_url: str, timeout_ms: int, require_signed: bool, required: bool):
+        self.client = RealAgentShieldClient(
+            base_url=base_url.rstrip('/') if base_url else None,
+            api_key=None,  # Use env var AGENTSHIELD_API_KEY
+            timeout_ms=timeout_ms,
+            require_signed=require_signed,
+            verify_merkle=True,
+        )
+        self.cache = SemanticDecisionCache(AGENTSHIELD_CACHE_TTL_SECONDS, AGENTSHIELD_CACHE_SIM_THRESHOLD)
+        self.required = required
+
+    def _cached_decision(self, text: str) -> Optional[Dict[str, Any]]:
+        hit = self.cache.lookup(text)
+        if hit:
+            decision = dict(hit['decision'])
+            decision['cache_hit'] = True
+            return decision
+        return None
+
+    def _store_cache(self, text: str, decision: Dict[str, Any]):
+        ttl = AGENTSHIELD_CACHE_TTL_SECONDS
+        expires_ms = decision.get("expires_at_ms")
+        if expires_ms:
+            ttl = max(1, min(ttl, int((expires_ms / 1000) - time.time())))
+        self.cache.store(text, decision, ttl)
+
+    def enforce(self, payload: Dict[str, Any], messages_text: str) -> Dict[str, Any]:
+        """
+        Enforce request using real AgentShield client with semantic caching.
+        """
+        # Check semantic cache first
+        cached = self._cached_decision(messages_text)
+        if cached:
+            return {"source": "cache", **cached}
+        
+        try:
+            # Call real AgentShield backend
+            data = self.client.enforce(payload)
+            
+            # Check expiry
+            now_ms = int(time.time() * 1000)
+            expires_ms = int(data.get("expires_at_ms", now_ms))
+            if now_ms > expires_ms:
+                if self.required:
+                    raise ValueError("AgentShield decision expired")
+                data['warn'] = 'expired'
+            
+            data['source'] = data.get('source', 'agentshield')
+            if messages_text:
+                self._store_cache(messages_text, data)
+            return data
+            
+        except requests.RequestException as e:
+            if self.required:
+                raise
+            return {"source": "agentshield", "action": "ALLOW", "warn": "agentshield_error"}
+        except ValueError as e:
+            if self.required:
+                raise
+            return {"source": "agentshield", "action": "ALLOW", "warn": "verification_failed"}
+
+
+agent_shield_client = AgentShieldClient(
+    AGENTSHIELD_URL,
+    AGENTSHIELD_JWKS_URL,
+    AGENTSHIELD_TIMEOUT_MS,
+    AGENTSHIELD_REQUIRE_SIGNED,
+    AGENTSHIELD_REQUIRED,
+) if AGENTSHIELD_URL else None
 
 # Agent-aware thresholds
 AGENT_PROFILES = {
@@ -1016,6 +1173,40 @@ def chat_completions():
             analysis['risk_score'] = 0.0
             analysis['should_block'] = False
         # ======================================================
+
+        # ======================================================
+        # AgentShield integration (external signed decision)
+        # ======================================================
+        agentshield_decision = None
+        if agent_shield_client and AGENTSHIELD_URL:
+            vigil_ctx = data.get('vigil', {}) if isinstance(data, dict) else {}
+            request_id = vigil_ctx.get('request_id') or f"as-{uuid.uuid4()}"
+            full_prompt = " ".join([msg.get('content', '') for msg in messages if msg.get('role') == 'user'])
+            input_hash = hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest() if messages else ""
+            payload = {
+                "request_id": request_id,
+                "tenant_id": tenant,
+                "agent_id": agent_id,
+                "policy_id": "vigil-default",
+                "policy_version": 1,
+                "input_hash": input_hash,
+                "timestamp_ms": int(time.time() * 1000),
+                "ttl_ms": AGENTSHIELD_DECISION_MAX_AGE_MS,
+                "environment": os.getenv("VIGIL_ENV", "docker"),
+                "messages": messages,
+            }
+            try:
+                agentshield_decision = agent_shield_client.enforce(payload, full_prompt)
+                if agentshield_decision.get('action') == 'BLOCK':
+                    analysis['should_block'] = True
+                    analysis['attack_families'].append('agentshield_block')
+                    analysis['risk_score'] = max(analysis['risk_score'], float(agentshield_decision.get('risk_score', 1.0)))
+            except Exception as e:
+                if AGENTSHIELD_REQUIRED:
+                    response = jsonify({"error": {"message": f"AgentShield enforcement failed: {e}"}})
+                    return apply_timing_normalization(response, request_start_ns, 503)
+                agentshield_decision = {"action": "ALLOW", "warn": "agentshield_error", "error": str(e)}
+        # ======================================================
         
         log_entry = {
             "timestamp": datetime.now().isoformat(),
@@ -1028,6 +1219,7 @@ def chat_completions():
             "session_id": session_id[:32],
             "tenant": tenant,
             "agent_id": agent_id,
+            "agentshield": agentshield_decision,
         }
         attack_logs.append(log_entry)
         if redis_client:
@@ -1046,6 +1238,7 @@ def chat_completions():
                 "attack_families": analysis['attack_families'],
                 "timestamp": datetime.utcnow().isoformat(),
                 "agent_id": agent_id,
+                "agentshield": agentshield_decision,
             }
             emit_incident_webhook(incident)
             response = jsonify({
@@ -1057,6 +1250,7 @@ def chat_completions():
                     "capability_violations": list(analysis['capability_violations'].keys()),
                     "attack_families": analysis['attack_families'],
                     "details": analysis['threat_details'][:5],
+                    "agentshield": agentshield_decision,
                 }
             })
             return apply_timing_normalization(response, request_start_ns, 403)
@@ -1098,6 +1292,7 @@ def chat_completions():
                 "agent_id": agent_id,
                 "tee_enabled": tee_integration is not None,
                 "attestation_quote": tee_integration.get_attestation_quote() if tee_integration else None,
+                "agentshield": agentshield_decision,
             }
         })
         return apply_timing_normalization(response, request_start_ns, 200)

@@ -1,11 +1,25 @@
 {
   "keys": [
     {
+      "hash": "625faa3fbbc3d2bd9d6ee7678d04cc5339cb33dc68d9b58451853d60046e226a",
+      "username": "redteam",
+      "description": "test key for red team testing",
+      "active": true,
+      "created_at": "2025-12-31"
+    },
+    {
       "hash": "f80c9e15fb32c3fb9dbf45dc830f25422466693dd72635174a890845c7bdd1c8",
       "username": "test_user",
       "description": "test key",
       "active": true,
       "created_at": "2024-12-21"
+    },
+    {
+      "hash": "8f3687f52f33164a42bcba5bb8a2280680c0257893173a94ec0801314ab219e7",
+      "username": "desi",
+      "description": "test",
+      "created_at": "2025-12-31T13:59:25.648669",
+      "active": true
     }
   ]
 }

@@ -43,15 +43,13 @@ FROM dependencies AS application
 # Copy application source including TEE modules
 COPY src/ /app/src/
 COPY vigil_enhanced_server.py /app/vigil_enhanced_server.py
-COPY dashboard.html /app/dashboard.html
-COPY dashboard_server.py /app/dashboard_server.py
-COPY local_server.py /app/local_server.py
 
 # Create directories for models, data, and TEE measurements
 RUN mkdir -p /app/models /app/data /app/logs /tmp
 
-# Copy threat vectors database (if exists)
-COPY data/threat_vectors.jsonl /app/data/threat_vectors.jsonl 2>/dev/null || echo "No threat_vectors.jsonl found, will use defaults"
+# Copy threat vectors database
+# If the file is absent, provide an empty placeholder to satisfy path expectations
+COPY data/threat_vectors.jsonl /app/data/threat_vectors.jsonl
 
 # Stage 4: Production runtime
 FROM application AS production

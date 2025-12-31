@@ -20,22 +20,22 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir \
     flask \
     flask-cors \
-    pycryptodome \
+    cryptography \
     && rm -rf /root/.cache/pip
 
-# Copy AgentShield mock service
-COPY agentshield_enclave_mock.py .
-COPY agentshield_policy.json ./policy.json
+# Copy AgentShield mock service (upgraded version)
+COPY mock_agentshield.py .
+COPY agentshield_policy.json .
 
 # Switch to non-root user
 USER agentshield
 
 # Expose port
-EXPOSE 8443
+EXPOSE 9000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8443/health || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:9000/health')" || exit 1
 
-# Run the enclave mock service
-CMD ["python", "agentshield_enclave_mock.py"]
+# Run the upgraded mock service
+CMD ["python", "mock_agentshield.py"]

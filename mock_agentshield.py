@@ -18,6 +18,7 @@ import datetime
 import re
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
+from math import ceil
 
 # Configuration (env overrides)
 POLICY_PATH = os.environ.get("POLICY_PATH", "agentshield_policy.json")
@@ -27,12 +28,37 @@ REPLAY_WINDOW_SECONDS = int(os.environ.get("REPLAY_WINDOW_SECONDS", "300"))   # 
 SEAL_KEY_PATH = os.environ.get("SEAL_KEY_PATH", "/tmp/agentshield_sealed_ed25519.key")
 REQUIRE_ATTESTATION = os.environ.get("REQUIRE_ATTESTATION", "false").lower() == "true"
 ATTESTATION_MEASUREMENT = os.environ.get("ATTESTATION_MEASUREMENT", "")
+# Optional: provide a fixed signing key (base64 raw 32 bytes) or path to raw key bytes
+SIGNING_KEY_B64 = os.environ.get("AGENTSHIELD_SIGNING_KEY_B64", "")
+SIGNING_KEY_PATH_OVERRIDE = os.environ.get("AGENTSHIELD_SIGNING_KEY_PATH", "")
 
 app = Flask(__name__)
 START_TIME = time.time()
 
 def load_or_create_sealed_key(path: str):
-    """Load Ed25519 private key from sealed storage or create one."""
+    """Load Ed25519 private key from env/path/sealed storage or create one."""
+    # Highest priority: explicit env b64 key
+    if SIGNING_KEY_B64:
+        try:
+            raw = base64.urlsafe_b64decode(SIGNING_KEY_B64 + "=")
+            return ed25519.Ed25519PrivateKey.from_private_bytes(raw)
+        except Exception:
+            pass
+
+    # Next: explicit override file path containing raw base64url or raw bytes
+    if SIGNING_KEY_PATH_OVERRIDE:
+        try:
+            with open(SIGNING_KEY_PATH_OVERRIDE, "rb") as f:
+                file_bytes = f.read().strip()
+                try:
+                    raw = base64.urlsafe_b64decode(file_bytes + b"=")
+                except Exception:
+                    raw = file_bytes
+            return ed25519.Ed25519PrivateKey.from_private_bytes(raw)
+        except Exception:
+            pass
+
+    # Fallback: sealed storage path (base64url)
     try:
         if os.path.exists(path):
             with open(path, "rb") as f:
@@ -141,12 +167,22 @@ def load_policy():
             )
         if not POLICY_RULES:
             POLICY_RULES = DEFAULT_BLOCK_PATTERNS[:]
+        # Allow env overrides for measurement allow-lists (comma-separated)
+        env_overrides = {
+            "sgx_mrenclave": os.getenv("AGENTSHIELD_SGX_MRENCLAVE", ""),
+            "sgx_mrsigner": os.getenv("AGENTSHIELD_SGX_MRSIGNER", ""),
+            "sev_measurement": os.getenv("AGENTSHIELD_SEV_MEASUREMENT", ""),
+            "tdx_mrtd": os.getenv("AGENTSHIELD_TDX_MRTD", ""),
+            "azure_measurement": os.getenv("AGENTSHIELD_AZURE_MEASUREMENT", ""),
+        }
+        def env_list(val):
+            return [v.strip() for v in val.split(',') if v.strip()] if val else []
         TEE_POLICY = {
-            "sgx_mrenclave": data.get("sgx_mrenclave", []),
-            "sgx_mrsigner": data.get("sgx_mrsigner", []),
-            "sev_measurement": data.get("sev_measurement", []),
-            "tdx_mrtd": data.get("tdx_mrtd", []),
-            "azure_measurement": data.get("azure_measurement", []),
+            "sgx_mrenclave": env_list(env_overrides["sgx_mrenclave"]) or data.get("sgx_mrenclave", []),
+            "sgx_mrsigner": env_list(env_overrides["sgx_mrsigner"]) or data.get("sgx_mrsigner", []),
+            "sev_measurement": env_list(env_overrides["sev_measurement"]) or data.get("sev_measurement", []),
+            "tdx_mrtd": env_list(env_overrides["tdx_mrtd"]) or data.get("tdx_mrtd", []),
+            "azure_measurement": env_list(env_overrides["azure_measurement"]) or data.get("azure_measurement", []),
         }
         POLICY_VERSION += 1
         POLICY_LOADED_AT = time.time()
@@ -189,6 +225,56 @@ analytics_store = {
     "risk_scores": [],
     "latencies": []
 }
+
+# Merkle accumulator for signed decision log
+MERKLE_LEAVES = []  # list of bytes digests
+MERKLE_LEVELS = []  # list of levels, each level is list of digests
+
+
+def _build_merkle_tree():
+    """Recompute full Merkle tree from leaves."""
+    global MERKLE_LEVELS
+    if not MERKLE_LEAVES:
+        MERKLE_LEVELS = []
+        return
+    level = MERKLE_LEAVES[:]
+    levels = [level]
+    while len(level) > 1:
+        next_level = []
+        for i in range(0, len(level), 2):
+            left = level[i]
+            right = level[i + 1] if i + 1 < len(level) else level[i]
+            next_level.append(hashlib.sha256(left + right).digest())
+        level = next_level
+        levels.append(level)
+    MERKLE_LEVELS = levels
+
+
+def _merkle_root_b64() -> str:
+    if not MERKLE_LEVELS:
+        return ""
+    root = MERKLE_LEVELS[-1][0]
+    return base64.urlsafe_b64encode(root).decode().rstrip('=')
+
+
+def _merkle_proof(index: int):
+    """Return Merkle proof (list of dicts with sibling and side)."""
+    proof = []
+    if index < 0 or not MERKLE_LEVELS:
+        return proof
+    idx = index
+    for level in MERKLE_LEVELS[:-1]:
+        sibling_idx = idx - 1 if idx % 2 else idx + 1
+        if sibling_idx >= len(level):
+            sibling = level[idx]
+        else:
+            sibling = level[sibling_idx]
+        proof.append({
+            "sibling": base64.urlsafe_b64encode(sibling).decode().rstrip('='),
+            "side": "left" if sibling_idx < idx else "right"
+        })
+        idx = idx // 2
+    return proof
 
 
 def evaluate_threat(messages):
@@ -363,6 +449,13 @@ def enforce():
     decision["signature"] = base64.urlsafe_b64encode(signature_bytes).decode().rstrip('=')
     decision["signature_key_id"] = ak["kid"]
     decision["canonical_payload_hash"] = base64.urlsafe_b64encode(payload_hash).decode().rstrip('=')
+
+    # 📦 Merkle accumulation
+    leaf = payload_hash
+    MERKLE_LEAVES.append(leaf)
+    _build_merkle_tree()
+    decision["merkle_root"] = _merkle_root_b64()
+    decision["merkle_proof"] = _merkle_proof(len(MERKLE_LEAVES) - 1)
     
     # Store analytics data
     analytics_store["requests"].append({
@@ -503,6 +596,15 @@ def analytics_threats():
         "total_threats": len(threats),
         "threats": threats[-50:],  # Last 50 threats
         "by_tenant": {k: len(v) for k, v in threats_by_tenant.items()}
+    })
+
+
+@app.route('/v1/merkle/root', methods=['GET'])
+def merkle_root():
+    return jsonify({
+        "root": _merkle_root_b64(),
+        "leaves": len(MERKLE_LEAVES),
+        "levels": len(MERKLE_LEVELS)
     })
 
 if __name__ == '__main__':
