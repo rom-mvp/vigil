@@ -22,4 +22,4 @@ ERROR    vigil.clients.agentshield_client:agentshield_client.py:318 Attestation 
 DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
 DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "GET /health HTTP/1.1" 200 105
 DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
-DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "POST /v1/chat/completions HTTP/1.1" 200 1345
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "POST /v1/chat/completions HTTP/1.1" 200 513
