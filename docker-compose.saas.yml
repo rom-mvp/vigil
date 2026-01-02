@@ -16,8 +16,8 @@ services:
       - VIGIL_ENV=docker
       - VIGIL_STRICT_MODE=true
       - VIGIL_MODE=saas
-        - AGENTSHIELD_URL=http://agentshield-enclave:9000
-        - AGENTSHIELD_JWKS_URL=http://agentshield-enclave:9000/v1/keys/jwks
+      - AGENTSHIELD_URL=http://agentshield-enclave:9000
+      - AGENTSHIELD_JWKS_URL=http://agentshield-enclave:9000/v1/keys/jwks
       - AGENTSHIELD_FAIL_MODE=deny
       
       # Enclave Connection (Docker DNS resolves 'agentshield-enclave')
@@ -58,13 +58,18 @@ services:
   # ═══════════════════════════════════════════════════════════
   agentshield-enclave:
     build:
-      context: .
-      dockerfile: Dockerfile.agentshield
+      context: ./services/agentshield
+      dockerfile: Dockerfile.prod
     container_name: agentshield-enclave
     environment:
-      - FLASK_APP=mock_agentshield.py
-      - FLASK_ENV=development
+      - APP_ENV=prod
+      - HARDWARE_BACKEND=aws_nitro
+      - AWS_REGION=us-east-1
       - PORT=9000
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentshield
+      - AGENTSHIELD_SIGNING_KEY_B64=${AGENTSHIELD_SIGNING_KEY_B64:-}
+      - REQUIRE_ATTESTATION=false
     ports:
       - "9000:9000"
     depends_on:

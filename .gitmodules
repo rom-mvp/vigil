@@ -1,0 +1,4 @@
+[submodule "services/agentshield"]
+	path = services/agentshield
+	url = git@github.com:rom-mvp/agentshield.git
+	branch = main
