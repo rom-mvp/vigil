@@ -72,7 +72,6 @@ graph LR
 ```bash
 git clone https://github.com/rom-mvp/vigil.git
 cd vigil
-
 ```
 
 ### 2. Start Services
@@ -85,7 +84,6 @@ python app.py &
 # Start Vigil (Blind Router)
 cd ../../src/vigil
 python local_server.py
-
 ```
 
 ### 3. Test Blind Courier Flow
@@ -126,7 +124,6 @@ signature = decision.get("signature")
 
 # Verify Ed25519 signature logic here...
 print("✅ Signature verified: Decision is authentic")
-
 ```
 
 ### 4. Run Tests
@@ -137,7 +134,6 @@ pytest tests/unit/
 
 # Integration tests
 pytest tests/integration/
-
 ```
 
 ---
@@ -167,7 +163,6 @@ pytest tests/integration/
 export VIGIL_MODE=local
 export VIGIL_ENVIRONMENT=test
 python src/vigil/local_server.py
-
 ```
 
 ### SaaS Mode (Production)
@@ -178,7 +173,6 @@ export VIGIL_ENVIRONMENT=production
 export VIGIL_PLAINTEXT_MODE=strict
 export REDIS_URL=redis://redis:6379
 docker-compose -f docker-compose.prod.yml up -d
-
 ```
 
 ---
@@ -203,7 +197,6 @@ has_prompt_injection(messages) {
 decision = "BLOCK" {
     has_prompt_injection(input.messages)
 }
-
 ```
 
 Policies are SHA-256 hashed and injected as `X-Policy-Signature` headers, enabling AgentShield to verify policy authority.
@@ -244,11 +237,13 @@ Policies are SHA-256 hashed and injected as `X-Policy-Signature` headers, enabli
 | `/health` | GET | Health check |
 | `/ready` | GET | Readiness check (validates AgentShield connection) |
 
+---
+
 ## License
 
 Vigil is released under the **Apache 2.0 License**.
 
-For commercial licensing and support, contact: suladesada@gmail.com
+For commercial licensing and support, contact: **suladesada@gmail.com**
 
 ---
 
