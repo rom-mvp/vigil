@@ -46,6 +46,16 @@ def health():
         'timestamp': datetime.utcnow().isoformat()
     }), 200
 
+@app.route('/internal/public-key', methods=['GET'])
+def internal_public_key():
+    """Return enclave public key (configured), no key generation here."""
+    pubkey_b64 = os.getenv('AGENTSHIELD_ENCLAVE_PUBKEY_B64', 'mock_enclave_pubkey_b64')
+    return jsonify({
+        'algorithm': os.getenv('AGENTSHIELD_ENCLAVE_ALGO', 'x25519'),
+        'public_key': pubkey_b64,
+        'version': 1
+    })
+
 
 @app.route('/api/v1/verify-attestation', methods=['POST'])
 def verify_attestation():

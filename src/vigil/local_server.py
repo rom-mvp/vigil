@@ -87,6 +87,41 @@ def _refresh_policies():
         time.sleep(60)
 
 threading.Thread(target=_refresh_policies, daemon=True).start()
+def _blind_log(status: str, request_id: str, tenant_id: str, policy_hash: str, payload_size: int):
+    """Metadata-only structured log. Forbids ciphertext logging at runtime."""
+    entry = {
+        "timestamp": datetime.datetime.utcnow().isoformat(),
+        "request_id": request_id,
+        "tenant": tenant_id,
+        "policy_hash": policy_hash,
+        "status": status,
+        "payload_size_bytes": int(payload_size or 0)
+    }
+    # Guard: ensure no sensitive keys accidentally included
+    forbidden_keys = {"ciphertext", "iv", "tag", "messages", "content"}
+    assert not any(k in entry for k in forbidden_keys), "Blind logger attempted to log sensitive fields"
+    try:
+        append_store.append(entry)
+    except Exception:
+        pass
+
+@app.route('/v1/system/public-key', methods=['GET'])
+def get_public_key():
+    """Key Proxy endpoint. Fetches enclave public key from AgentShield and caches for 1h."""
+    cache = getattr(app, '_pubkey_cache', None)
+    now = time.time()
+    if cache and cache.get('expires_at', 0) > now:
+        return jsonify(cache['value'])
+    try:
+        url = f"{os.getenv('AGENTSHIELD_URL', 'http://localhost:9000')}/internal/public-key"
+        r = requests.get(url, timeout=2.0)
+        r.raise_for_status()
+        data = r.json()
+        app._pubkey_cache = {"value": data, "expires_at": now + 3600}
+        return jsonify(data)
+    except Exception:
+        return jsonify({"error": "Public key unavailable"}), 503
+
 
 LOG_SERVER_URL = os.environ.get('LOG_SERVER_URL', 'http://vigil-dashboard:3000/ingest')
 
@@ -728,6 +763,14 @@ def transparent_proxy():
     try:
         t_agentshield_start = time.time()
         agentshield_response = agentshield.enforce(enforcement_req)
+        # Metadata-only blind log for forwarded request
+        _blind_log(
+            status="FORWARDED",
+            request_id=request_id,
+            tenant_id=tenant_id,
+            policy_hash=policy_hash,
+            payload_size=len(request.data) if request.data else 0,
+        )
         timings['t_agentshield_ms'] = round((time.time() - t_agentshield_start) * 1000, 2)
     except Exception as e:
         enforcement_error = str(e)

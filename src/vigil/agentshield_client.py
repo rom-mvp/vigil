@@ -534,11 +534,17 @@ class AgentShieldClient:
         last_exception = None
         for attempt in range(self.max_retries + 1):
             try:
+                headers = {}
+                # Inject policy signature header when present (blind router contract)
+                policy_sig = enforcement_request.get("policy_signature")
+                if policy_sig:
+                    headers["X-Policy-Signature"] = policy_sig
                 resp = requests.post(
                     url,
                     json=enforcement_request,
                     timeout=self.timeout_ms / 1000.0,
-                    cert=cert
+                    cert=cert,
+                    headers=headers or None
                 )
                 resp.raise_for_status()
                 decision = resp.json()
