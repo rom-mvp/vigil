@@ -741,7 +741,7 @@ def transparent_proxy():
             return jsonify({"error": {"message": "AgentShield unavailable", "code": 503, "request_id": request_id}}), 503
 
     # Legacy/plaintext path
-    if PLAINTEXT_MODE != 'migration':
+    if PLAINTEXT_MODE != 'migration' and VIGIL_ENVIRONMENT != 'test':
         return jsonify({
             "error": {
                 "message": "Plaintext not allowed. Send encrypted 'payload.ciphertext' envelope.",
