@@ -131,12 +131,16 @@ RATE_LIMIT_RPS = float(os.environ.get('RATE_LIMIT_RPS', '5'))
 REQUIRE_MTLS = os.environ.get('REQUIRE_MTLS', 'false').lower() == 'true'
 VIGIL_ENVIRONMENT = os.environ.get('VIGIL_ENVIRONMENT', 'local')
 PLAINTEXT_MODE = os.environ.get('VIGIL_PLAINTEXT_MODE', 'strict').lower()  # 'strict' or 'migration'
+VIGIL_STRICT_MODE = os.environ.get('VIGIL_STRICT_MODE', '0')
+if VIGIL_STRICT_MODE == '1':
+    PLAINTEXT_MODE = 'strict'
 POLICY_PATH = os.environ.get('POLICY_PATH', os.path.join(os.getcwd(), 'policies', 'policy.rego'))
 
 AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '1000')) / 1000.0  # Reduced to 1000ms
 
 # Cached policy hash (mtime-aware)
 _policy_cache = {"path": POLICY_PATH, "hash": None, "mtime": 0}
+_policy_last_logged = None
 
 # Simple per-API-key token buckets (Redis-backed if available, else in-memory)
 _rate_buckets = {}
@@ -216,7 +220,7 @@ def _load_policy_hash_cached() -> str:
     Ensures every forwarded request carries the current policy signature.
     Reloads when the file mtime changes; falls back to env override.
     """
-    global _policy_cache
+    global _policy_cache, _policy_last_logged
     path = _policy_cache.get("path") or POLICY_PATH
     try:
         mtime = os.path.getmtime(path)
@@ -226,6 +230,9 @@ def _load_policy_hash_cached() -> str:
             data = f.read()
         h = hashlib.sha256(data).hexdigest()
         _policy_cache.update({"hash": h, "mtime": mtime, "path": path})
+        if h != _policy_last_logged:
+            logger.info(f"Loaded policy hash {h[:12]} from {path}")
+            _policy_last_logged = h
         return h
     except Exception:
         fallback = os.environ.get('VIGIL_POLICY_HASH', 'unknown-policy-hash')
