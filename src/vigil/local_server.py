@@ -131,8 +131,12 @@ RATE_LIMIT_RPS = float(os.environ.get('RATE_LIMIT_RPS', '5'))
 REQUIRE_MTLS = os.environ.get('REQUIRE_MTLS', 'false').lower() == 'true'
 VIGIL_ENVIRONMENT = os.environ.get('VIGIL_ENVIRONMENT', 'local')
 PLAINTEXT_MODE = os.environ.get('VIGIL_PLAINTEXT_MODE', 'strict').lower()  # 'strict' or 'migration'
+POLICY_PATH = os.environ.get('POLICY_PATH', os.path.join(os.getcwd(), 'policies', 'policy.rego'))
 
 AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '1000')) / 1000.0  # Reduced to 1000ms
+
+# Cached policy hash (mtime-aware)
+_policy_cache = {"path": POLICY_PATH, "hash": None, "mtime": 0}
 
 # Simple per-API-key token buckets (Redis-backed if available, else in-memory)
 _rate_buckets = {}
@@ -206,28 +210,30 @@ def _rate_check(api_key: str) -> bool:
         return True
     return False
 
-def _compute_policy_hash() -> str:
-    """Compute SHA-256 of current policy bundle (OPA rules).
+def _load_policy_hash_cached() -> str:
+    """Compute SHA-256 of policy.rego with mtime-aware caching.
 
-    Vigil should not parse content policies; it signs and forwards.
-    Tries common locations and falls back to environment override.
+    Ensures every forwarded request carries the current policy signature.
+    Reloads when the file mtime changes; falls back to env override.
     """
-    import hashlib
-    candidate_paths = [
-        os.environ.get('VIGIL_POLICY_PATH'),
-        os.path.join(os.getcwd(), 'shared', 'policies', 'policy.rego'),
-        os.path.join(os.getcwd(), 'policies', 'policy.rego'),
-    ]
-    for p in candidate_paths:
-        if p and os.path.exists(p):
-            try:
-                with open(p, 'rb') as f:
-                    data = f.read()
-                return hashlib.sha256(data).hexdigest()
-            except Exception:
-                continue
-    # Fallback to static identifier to avoid blocking
-    return os.environ.get('VIGIL_POLICY_HASH', 'unknown-policy-hash')
+    global _policy_cache
+    path = _policy_cache.get("path") or POLICY_PATH
+    try:
+        mtime = os.path.getmtime(path)
+        if _policy_cache.get("hash") and mtime == _policy_cache.get("mtime"):
+            return _policy_cache["hash"]
+        with open(path, 'rb') as f:
+            data = f.read()
+        h = hashlib.sha256(data).hexdigest()
+        _policy_cache.update({"hash": h, "mtime": mtime, "path": path})
+        return h
+    except Exception:
+        fallback = os.environ.get('VIGIL_POLICY_HASH', 'unknown-policy-hash')
+        _policy_cache.update({"hash": fallback})
+        return fallback
+
+# Initialize policy hash at import time (startup)
+_load_policy_hash_cached()
 
 @app.route('/v1/tool/execute', methods=['POST'])
 def execute_tool():
@@ -705,7 +711,7 @@ def transparent_proxy():
             app._policy_versions = {}
         policy_version = int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0))
         policy_id = request.headers.get('X-Policy-ID', f'policy-{tenant_id}-{agent_id}')
-        policy_hash = _compute_policy_hash()
+        policy_hash = _load_policy_hash_cached()
 
         envelope = body.get('payload') or {}
         enforcement_req = {
@@ -782,7 +788,7 @@ def transparent_proxy():
     
     policy_version = int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0))
     policy_id = request.headers.get('X-Policy-ID', f'policy-{tenant_id}-{agent_id}')
-    policy_hash = _compute_policy_hash()
+    policy_hash = _load_policy_hash_cached()
     
     # Priority 4: Idempotency key support for request deduplication
     idempotency_key = request.headers.get('X-Idempotency-Key')
