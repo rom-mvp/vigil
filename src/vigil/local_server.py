@@ -16,14 +16,10 @@ import redis
 import logging
 import numpy as np
 
-from .firewall_engine import FirewallEngine
-from .pii_engine import PIIEngine
 from .merkle_log_store import MerkleLogStore
 from .agentshield_client import AgentShieldClient, VigilErrorCode
 from .log_sync_worker import LogSyncWorker
-from .vector_engine import VectorEngine
 from .api_key_auth import APIKeyAuth, InvalidAPIKey
-from .token_meter import TokenMeter
 from .config import (
     VIGIL_MODE,
     AGENTSHIELD_URL,
@@ -36,9 +32,6 @@ from jwt import PyJWKClient
 
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
-firewall = FirewallEngine()
-pii_engine = None  # Lazy-loaded on first use
-vector_engine = VectorEngine()  # Vector threat detection (ONNX/TensorRT + VRAM)
 append_store = MerkleLogStore(os.environ.get('APPEND_LOG_PATH', 'logs_append_only.jsonl'))
 agentshield = AgentShieldClient(
     base_url=AGENTSHIELD_URL or "http://localhost:9000",
@@ -74,13 +67,6 @@ def verify_decision_jwt(decision_token: str, jwks_url: str) -> dict:
 
 # SaaS Components
 api_key_auth = APIKeyAuth()  # API key validation and tenant resolution
-token_meter = TokenMeter()  # Token counting and billing
-
-def _get_pii_engine():
-    global pii_engine
-    if pii_engine is None:
-        pii_engine = PIIEngine()
-    return pii_engine
 
 # Initialize Log Sync Worker (Priority 6)
 log_worker = LogSyncWorker(os.environ.get('AGENTSHIELD_URL', 'http://localhost:9000'))
@@ -88,7 +74,6 @@ log_worker.start()
 
 # Register components with AgentShield client for fail-open/caching coordination
 agentshield.register_log_worker(log_worker)
-agentshield.register_firewall_engine(firewall)
 
 # Background task to refresh local policies (Priority 6)
 def _refresh_policies():
@@ -111,9 +96,6 @@ RATE_LIMIT_RPS = float(os.environ.get('RATE_LIMIT_RPS', '5'))
 REQUIRE_MTLS = os.environ.get('REQUIRE_MTLS', 'false').lower() == 'true'
 VIGIL_ENVIRONMENT = os.environ.get('VIGIL_ENVIRONMENT', 'local')
 
-# Policy enforcement thresholds
-MAX_RISK_SCORE = float(os.environ.get('MAX_RISK_SCORE', '0.30'))
-DISALLOWED_REASONS = set(os.environ.get('DISALLOWED_REASONS', 'credential-exfil,tenant-boundary,privilege-escalation').split(','))
 AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '1000')) / 1000.0  # Reduced to 1000ms
 
 # Simple per-API-key token buckets (Redis-backed if available, else in-memory)
@@ -188,67 +170,28 @@ def _rate_check(api_key: str) -> bool:
         return True
     return False
 
-def _is_mostly_printable(text: str) -> bool:
-    printable = set(string.printable)
-    if not text:
-        return False
-    ratio = sum(1 for ch in text if ch in printable) / len(text)
-    return ratio > 0.8
+def _compute_policy_hash() -> str:
+    """Compute SHA-256 of current policy bundle (OPA rules).
 
-
-def _normalize_text(raw: str) -> str:
-    """Normalize obfuscated text: base64, rot13, leetspeak, homoglyphs."""
-    text = raw
-
-    def _readability_score(s: str) -> float:
-        vowels = sum(1 for ch in s.lower() if ch in 'aeiou')
-        spaces = s.count(' ')
-        letters = sum(1 for ch in s if ch.isalpha())
-        return vowels * 2 + spaces + letters * 0.1
-
-    # Base64 decode if it looks plausible
-    b64_candidate = re.sub(r"\s", "", text)
-    if len(b64_candidate) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/=]+", b64_candidate or ""):
-        try:
-            decoded = base64.b64decode(b64_candidate, validate=True)
-            decoded_str = decoded.decode('utf-8', errors='ignore')
-            if _is_mostly_printable(decoded_str):
-                text = decoded_str
-        except Exception:
-            pass
-
-    # Leetspeak normalization first
-    leet_map = str.maketrans({
-        '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's', '!': 'i'
-    })
-    text = text.translate(leet_map)
-
-    # Homoglyph and compatibility normalization
-    text = unicodedata.normalize('NFKC', text)
-
-    # Rot13 heuristic: token-level to avoid double-rotating mixed strings
-    tokens = []
-    skip_words = {"how","who","why","are","you","the","and","for","to","of","in","on","by","with","make","bomb","napalm"}
-    for w in text.split():
-        letters = sum(1 for ch in w if ch.isalpha())
-        if letters == 0:
-            tokens.append(w)
-            continue
-        vowels = sum(1 for ch in w.lower() if ch in 'aeiou')
-        vowel_ratio = vowels / letters if letters else 0
-        lower_w = w.lower()
-        if lower_w in skip_words:
-            tokens.append(w)
-            continue
-        if len(w) <= 3 and vowel_ratio < 0.6:  # rotate only short connector-like tokens
-            rw = codecs.decode(w, 'rot_13')
-            if _is_mostly_printable(rw) and _readability_score(rw) >= _readability_score(w):
-                tokens.append(rw)
+    Vigil should not parse content policies; it signs and forwards.
+    Tries common locations and falls back to environment override.
+    """
+    import hashlib
+    candidate_paths = [
+        os.environ.get('VIGIL_POLICY_PATH'),
+        os.path.join(os.getcwd(), 'shared', 'policies', 'policy.rego'),
+        os.path.join(os.getcwd(), 'policies', 'policy.rego'),
+    ]
+    for p in candidate_paths:
+        if p and os.path.exists(p):
+            try:
+                with open(p, 'rb') as f:
+                    data = f.read()
+                return hashlib.sha256(data).hexdigest()
+            except Exception:
                 continue
-        tokens.append(w)
-    text = " ".join(tokens)
-
-    return text
+    # Fallback to static identifier to avoid blocking
+    return os.environ.get('VIGIL_POLICY_HASH', 'unknown-policy-hash')
 
 @app.route('/v1/tool/execute', methods=['POST'])
 def execute_tool():
@@ -697,28 +640,6 @@ def transparent_proxy():
     # SAAS QUOTA CHECK - Step 3: Check Token Quota
     # ============================================================================
     body = request.json or {}
-    messages = body.get('messages', [])
-    model = body.get('model', 'gpt-4')
-    
-    # Estimate input tokens for quota check
-    estimated_input_tokens = token_meter.count_message_tokens(messages, model)
-    quota_status = token_meter.check_quota(tenant_id, tier, estimated_input_tokens)
-    
-    if not quota_status['within_quota']:
-        return jsonify({
-            "error": {
-                "message": "Token quota exceeded for your subscription tier",
-                "code": 429,
-                "type": "quota_exceeded",
-                "details": {
-                    "tier": tier,
-                    "daily_limit": quota_status['daily']['limit'],
-                    "daily_used": quota_status['daily']['used'],
-                    "monthly_limit": quota_status['monthly']['limit'],
-                    "monthly_used": quota_status['monthly']['used']
-                }
-            }
-        }), 429
     
     # mTLS client cert enforcement (stub): require header when enabled
     if REQUIRE_MTLS and not request.headers.get('X-Client-Cert'):
@@ -735,42 +656,7 @@ def transparent_proxy():
     if request.data and len(request.data) > MAX_REQUEST_BYTES:
         return jsonify({"error": {"message": "Payload too large", "code": 413}}), 413
     
-    # [STEP 1] Normalize potential obfuscation before scanning
-    normalized_contents = []
-    for msg in messages:
-        if isinstance(msg, dict) and 'content' in msg and isinstance(msg['content'], str):
-            normalized = _normalize_text(msg['content'])
-            msg['content'] = normalized
-            normalized_contents.append(normalized)
-    
-    # [STEP 2] Vector Threat Scan - Embedding + VRAM Search
-    timings['t_vector_start'] = time.time()
-    vector_scan_results = {
-        "scanned": False,
-        "vector_db_hit": False,
-        "vector_distance": 0.0,
-        "detected_clusters": [],
-        "embedding_depth": 384,
-        "vector_hits": []
-    }
-    # Precompute embedding for extraction risk (optional)
-    embedding = None
-    try:
-        combined_input = " ".join([content for content in normalized_contents if content])
-        if combined_input:
-            embedding = vector_engine.embed(combined_input)
-    except Exception:
-        embedding = None
-
-    try:
-        # Combine all user messages for single embedding scan
-        combined_input = " ".join([content for content in normalized_contents if content])
-        if combined_input:
-            vector_scan_results = vector_engine.scan(combined_input)
-            timings['t_vector_ms'] = round((time.time() - timings['t_vector_start']) * 1000, 2)
-    except Exception as e:
-        print(f"Warning: Vector scan failed: {e}")
-        timings['t_vector_ms'] = 0
+    # Blind Router: Vigil must not inspect content. No normalization or semantic scans.
     
     # Note: tenant_id already set from API key validation above
     # In SaaS mode, tenant comes from API key, not headers
@@ -801,7 +687,8 @@ def transparent_proxy():
         tenant_id = request.headers.get('X-Tenant-ID', tenant_id)
     
     policy_version = int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0))
-    policy_id = request.headers.get('X-Policy-ID', f'policy-{tenant_id}-{agent_id}')  # NEW: policy_id with tenant
+    policy_id = request.headers.get('X-Policy-ID', f'policy-{tenant_id}-{agent_id}')
+    policy_hash = _compute_policy_hash()
     
     # Priority 4: Idempotency key support for request deduplication
     idempotency_key = request.headers.get('X-Idempotency-Key')
@@ -812,28 +699,25 @@ def transparent_proxy():
         if cached_response:
             return cached_response  # Return cached result for same idempotency key
     
+    # Blind envelope: Vigil forwards opaque payload only
+    envelope = body.get('payload') or {}
     enforcement_req = {
         "request_id": request_id,
         "tenant_id": tenant_id,
+        "user_id": body.get('user_id'),
         "agent_id": agent_id,
-        "policy_id": policy_id,  # NEW
+        "policy_id": policy_id,
         "policy_version": policy_version,
+        "policy_signature": policy_hash,
         "environment": VIGIL_ENVIRONMENT,
-        "messages": messages,
-        "metadata": body.get('metadata', {}),
-        # [STEP 3] Pass vector scan results to AgentShield
-        "scan_results": {
-            "scanned": vector_scan_results.get("scanned", False),
-            "vector_db_hit": vector_scan_results.get("vector_db_hit", False),
-            "vector_distance": vector_scan_results.get("vector_distance", 0.0),
-            "detected_clusters": vector_scan_results.get("detected_clusters", []),
-            "embedding_depth": vector_scan_results.get("embedding_depth", 384),
-            "vector_hits": vector_scan_results.get("vector_hits", []),
-            "threat_detected_by_vector": vector_scan_results.get("threat_detected", False),
-            "max_threat_score": vector_scan_results.get("max_score", 0.0),
-            "num_vector_matches": vector_scan_results.get("num_hits", 0)
-        }
-        # Note: timestamp_ms, ttl_ms, and input_hash are auto-added by AgentShieldClient
+        "payload": {
+            "version": envelope.get('version', 1),
+            "ciphertext": envelope.get('ciphertext'),
+            "iv": envelope.get('iv'),
+            "tag": envelope.get('tag')
+        },
+        "metadata": {"tier": tier}
+        # Note: timestamp_ms, ttl_ms, and input_hash added by AgentShieldClient
     }
     
     # =========================================================================
@@ -966,19 +850,7 @@ def transparent_proxy():
         if policy_override not in reasons:
             reasons.append(policy_override)
 
-    # Final heuristic firewall check (always-on override)
-    try:
-        for msg in messages:
-            if msg.get('role') == 'user':
-                content = msg.get('content', '')
-                check = firewall.scan_input(content)
-                if not check.get('safe', True):
-                    action = 'BLOCK'
-                    if 'HEURISTIC_BLOCK' not in reasons:
-                        reasons.append('HEURISTIC_BLOCK')
-                    break
-    except Exception:
-        pass
+    # No heuristic content firewall in Vigil (blind router)
 
     # Structured log + local append-only cache
     timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
@@ -1044,117 +916,16 @@ def transparent_proxy():
                 oldest_key = next(iter(app._idempotency_cache))
                 del app._idempotency_cache[oldest_key]
         return response
-    # ============================================================================
-    # SAAS LLM FORWARDING - Step 4: Acquire secret via AgentShield (mandatory)
-    # ============================================================================
-    try:
-        secret = agentshield.acquire_secret(decision_token=decision_token, action="chat.completion")
-        llm_api_key = secret.get('api_key')
-        llm_endpoint = secret.get('endpoint', 'https://api.openai.com/v1/chat/completions')
-        llm_model = secret.get('model') or body.get('model', 'gpt-4')
-    except Exception as e:
-        return jsonify({"error": {"message": "AgentShield secret acquisition failed", "code": 503, "request_id": request_id}}), 503
-
-    if not llm_api_key:
-        return jsonify({
-            "error": {
-                "message": "No LLM API key configured for your account",
-                "code": 500,
-                "type": "configuration_error"
-            }
-        }), 500
-
-    # ============================================================================
-    # SAAS LLM CALL - Step 5: Forward to LLM with Tenant's Key
-    # ============================================================================
-    timings['t_llm_start'] = time.time()
-
-    llm_body = {
-        "model": llm_model,
-        "messages": messages,
-        **{k: v for k, v in body.items() if k not in ['model', 'messages', 'provider']}
-    }
-
-    llm_headers = {
-        "Authorization": f"Bearer {llm_api_key}",
-        "Content-Type": "application/json"
-    }
-
-    llm_response = requests.post(
-        llm_endpoint,
-        json=llm_body,
-        headers=llm_headers,
-        timeout=60.0  # LLM timeout
-    )
-
-    timings['t_llm_ms'] = round((time.time() - timings['t_llm_start']) * 1000, 2)
-
-    if llm_response.status_code != 200:
-        return jsonify({
-            "error": {
-                "message": f"LLM request failed: {llm_response.status_code}",
-                "code": llm_response.status_code,
-                "type": "llm_error",
-                "details": llm_response.text[:500]
-            }
-        }), llm_response.status_code
-
-    llm_data = llm_response.json()
-
-    # ============================================================================
-    # SAAS METERING - Step 6: Record Token Usage for Billing
-    # ============================================================================
-    usage = llm_data.get('usage', {})
-    input_tokens = usage.get('prompt_tokens', estimated_input_tokens)
-    output_tokens = usage.get('completion_tokens', 0)
-
-    token_meter.record_usage(
-        tenant_id=tenant_id,
-        request_id=request_id,
-        model=llm_model,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        metadata={
-            'agent_id': agent_id,
-            'policy_id': policy_id,
-            'tier': tier,
-            'risk_score': risk_score,
-            'audit_event_id': agentshield_response.get('audit_event_id')
-        }
-    )
-
-    llm_data['vigil'] = {
+    # Blind Router: Vigil does not perform LLM calls or token metering.
+    response = jsonify({
+        "status": "ALLOW",
         "request_id": request_id,
         "tenant_id": tenant_id,
-        "action": "ALLOW",
-        "risk_score": risk_score,
-        "signature_hash": agentshield_response.get('decision_hash'),
-        "audit_event_id": agentshield_response.get('audit_event_id'),
-        "vector_scan": {
-            "scanned": vector_scan_results.get("scanned", False),
-            "threat_detected": vector_scan_results.get("threat_detected", False)
-        },
-        "extraction_risk": (_compute_extraction_risk(embedding) if embedding is not None else {
-            "extraction_risk_score": 0.0,
-            "indicators": [],
-            "estimated_intent": "benign",
-        }),
-        "usage": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens
-        },
-        "timings": {
-            "vector_ms": timings.get('t_vector_ms', 0),
-            "agentshield_ms": timings.get('t_agentshield_ms', 0),
-            "llm_ms": timings.get('t_llm_ms', 0),
-            "total_ms": round((time.time() - t_start) * 1000, 2)
-        }
-    }
-    if agentshield_response and isinstance(agentshield_response, dict):
-        llm_data['agentshield_security'] = agentshield_response.get('agentshield', {})
-
-    response = jsonify(llm_data)
+        "policy_id": policy_id,
+        "policy_version": policy_version,
+        "policy_signature": policy_hash,
+        "agentshield": agentshield_response
+    })
 
     if idempotency_key:
         app._idempotency_cache[idempotency_key] = response
