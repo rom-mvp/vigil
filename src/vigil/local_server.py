@@ -130,6 +130,7 @@ MAX_REQUEST_BYTES = int(os.environ.get('MAX_REQUEST_BYTES', '4096'))  # tighter 
 RATE_LIMIT_RPS = float(os.environ.get('RATE_LIMIT_RPS', '5'))
 REQUIRE_MTLS = os.environ.get('REQUIRE_MTLS', 'false').lower() == 'true'
 VIGIL_ENVIRONMENT = os.environ.get('VIGIL_ENVIRONMENT', 'local')
+PLAINTEXT_MODE = os.environ.get('VIGIL_PLAINTEXT_MODE', 'strict').lower()  # 'strict' or 'migration'
 
 AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '1000')) / 1000.0  # Reduced to 1000ms
 
@@ -691,7 +692,65 @@ def transparent_proxy():
     if request.data and len(request.data) > MAX_REQUEST_BYTES:
         return jsonify({"error": {"message": "Payload too large", "code": 413}}), 413
     
-    # Blind Router: Vigil must not inspect content. No normalization or semantic scans.
+    # Blind Router path: detect encrypted envelope
+    is_blind = (
+        isinstance(body, dict)
+        and isinstance(body.get('payload'), dict)
+        and isinstance(body['payload'].get('ciphertext'), str)
+    )
+
+    if is_blind:
+        agent_id = request.headers.get("X-Agent-ID", "anonymous-agent")
+        if not hasattr(app, '_policy_versions'):
+            app._policy_versions = {}
+        policy_version = int(request.headers.get('X-Policy-Version', app._policy_versions.get(agent_id, -1) or 0))
+        policy_id = request.headers.get('X-Policy-ID', f'policy-{tenant_id}-{agent_id}')
+        policy_hash = _compute_policy_hash()
+
+        envelope = body.get('payload') or {}
+        enforcement_req = {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "user_id": body.get('user_id'),
+            "agent_id": agent_id,
+            "policy_id": policy_id,
+            "policy_version": policy_version,
+            "policy_signature": policy_hash,
+            "environment": VIGIL_ENVIRONMENT,
+            "payload": {
+                "version": envelope.get('version', 1),
+                "ciphertext": envelope.get('ciphertext'),
+                "iv": envelope.get('iv'),
+                "tag": envelope.get('tag')
+            },
+            "metadata": {"tier": tier}
+        }
+
+        try:
+            agentshield_response = agentshield.enforce(enforcement_req)
+            _blind_log(
+                status="FORWARDED",
+                request_id=request_id,
+                tenant_id=tenant_id,
+                policy_hash=policy_hash,
+                payload_size=len(request.data) if request.data else 0,
+            )
+            # Passthrough exact response
+            return jsonify(agentshield_response), 200
+        except Exception as e:
+            return jsonify({"error": {"message": "AgentShield unavailable", "code": 503, "request_id": request_id}}), 503
+
+    # Legacy/plaintext path
+    if PLAINTEXT_MODE != 'migration':
+        return jsonify({
+            "error": {
+                "message": "Plaintext not allowed. Send encrypted 'payload.ciphertext' envelope.",
+                "code": 400,
+                "type": "plaintext_rejected"
+            }
+        }), 400
+    else:
+        logger.warning("Plaintext deprecated: forwarding in migration mode")
     
     # Note: tenant_id already set from API key validation above
     # In SaaS mode, tenant comes from API key, not headers

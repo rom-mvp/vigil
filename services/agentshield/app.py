@@ -167,6 +167,36 @@ def verify_attestation():
             'reasons': []
         }
         return jsonify({'decision': 'ALLOW', 'agentshield': decision}), 200
+
+    @app.route('/v1/enforce-blind', methods=['POST'])
+    def enforce_blind():
+        """
+        Blind enforcement endpoint used by Vigil. Validates policy signature and payload shape,
+        and returns an encrypted result. No plaintext is ever accessed here (mock implementation).
+        """
+        try:
+            data = request.get_json(force=True)
+        except Exception:
+            return jsonify({'error': 'Invalid JSON'}), 400
+
+        payload = (data or {}).get('payload') or {}
+        if not isinstance(payload, dict) or not payload.get('ciphertext'):
+            return jsonify({'error': 'Missing ciphertext'}), 400
+
+        # Header policy signature validation (mock)
+        policy_sig = request.headers.get('X-Policy-Signature')
+        if not policy_sig or len(policy_sig.replace('sha256:', '')) < 10:
+            return jsonify({'error': 'Invalid policy signature'}), 403
+
+        # Mock: Echo back encrypted payload as "result" to simulate pass-through
+        result = {
+            'version': payload.get('version', 1),
+            'ciphertext': payload.get('ciphertext'),
+            'iv': payload.get('iv'),
+            'tag': payload.get('tag'),
+            'processed_at': datetime.utcnow().isoformat()
+        }
+        return jsonify(result), 200
         
     except Exception as e:
         logger.error(f"Attestation verification error: {str(e)}")
