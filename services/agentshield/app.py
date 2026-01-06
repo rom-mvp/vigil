@@ -10,9 +10,13 @@ import json
 import logging
 import hashlib
 import time
+import base64
+import uuid
 from datetime import datetime
 from flask import Flask, request, jsonify
 from typing import Dict, Any
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import serialization
 
 # Configure logging
 logging.basicConfig(
@@ -29,10 +33,32 @@ APP_ENV = os.getenv('APP_ENV', 'dev')
 HARDWARE_BACKEND = os.getenv('HARDWARE_BACKEND', 'aws_nitro')
 REQUIRE_ATTESTATION = os.getenv('REQUIRE_ATTESTATION', 'false').lower() == 'true'
 
-# Mock keys for signing (in production, load from AWS Secrets Manager)
-MOCK_SIGNING_KEY = os.getenv('AGENTSHIELD_SIGNING_KEY_B64', 'mock_key_b64')
+# Ed25519 Signing Key
+# In production, load from secure enclave or AWS Secrets Manager
+SIGNING_KEY_B64 = os.getenv('AGENTSHIELD_SIGNING_KEY_B64')
+if SIGNING_KEY_B64 and SIGNING_KEY_B64 != 'mock_key_b64':
+    try:
+        key_bytes = base64.b64decode(SIGNING_KEY_B64)
+        SIGNING_KEY = ed25519.Ed25519PrivateKey.from_private_bytes(key_bytes)
+        logger.info("Loaded Ed25519 signing key from environment")
+    except Exception as e:
+        logger.warning(f"Failed to load signing key from env: {e}, generating new key")
+        SIGNING_KEY = ed25519.Ed25519PrivateKey.generate()
+else:
+    logger.info("Generating new Ed25519 signing key (development mode)")
+    SIGNING_KEY = ed25519.Ed25519PrivateKey.generate()
+
+# Public key for JWKS
+PUBLIC_KEY = SIGNING_KEY.public_key()
+PUBLIC_KEY_BYTES = PUBLIC_KEY.public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw
+)
+PUBLIC_KEY_B64 = base64.urlsafe_b64encode(PUBLIC_KEY_BYTES).decode('utf-8').rstrip('=')
+KEY_ID = hashlib.sha256(PUBLIC_KEY_BYTES).hexdigest()[:16]
 
 logger.info(f"AgentShield starting - ENV={APP_ENV}, BACKEND={HARDWARE_BACKEND}")
+logger.info(f"Signing key ID: {KEY_ID}")
 
 
 @app.route('/health', methods=['GET'])
@@ -55,6 +81,23 @@ def internal_public_key():
         'public_key': pubkey_b64,
         'version': 1
     })
+
+
+@app.route('/.well-known/jwks.json', methods=['GET'])
+def jwks():
+    """JWKS endpoint for signature verification"""
+    return jsonify({
+        'keys': [
+            {
+                'kty': 'OKP',
+                'use': 'sig',
+                'kid': KEY_ID,
+                'alg': 'EdDSA',
+                'crv': 'Ed25519',
+                'x': PUBLIC_KEY_B64
+            }
+        ]
+    }), 200
 
 
 @app.route('/api/v1/verify-attestation', methods=['POST'])
@@ -113,94 +156,241 @@ def verify_attestation():
         logger.info(f"Attestation verification successful: {verification_result['pcr0'][:16]}...")
         
         return jsonify(verification_result), 200
-
-    @app.route('/api/v1/blind-execute', methods=['POST'])
-    def blind_execute():
-        """
-        Blind execution entrypoint. Validates policy_signature and envelope shape.
-        NEVER inspects plaintext. Rejects immediately if policy hash mismatch.
-
-        Expected JSON:
-        {
-          "request_id": "uuid",
-          "tenant_id": "cust-...",
-          "user_id": "alice@...",
-          "policy_signature": "sha256:...",
-          "payload": {"version": 1, "ciphertext": "...", "iv": "...", "tag": "..."}
-        }
-        """
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return jsonify({'error': 'Invalid JSON'}), 400
-
-        if not isinstance(data, dict):
-            return jsonify({'error': 'Invalid body'}), 400
-
-        req_id = data.get('request_id')
-        tenant_id = data.get('tenant_id')
-        policy_sig = data.get('policy_signature')
-        payload = data.get('payload') or {}
-
-        # Basic envelope checks
-        required_fields = ['version', 'ciphertext', 'iv', 'tag']
-        if not all(field in payload for field in required_fields):
-            return jsonify({'error': 'Invalid envelope'}), 400
-
-        # Verify policy signature/hash (mock): require non-empty and sha256-like length
-        if not policy_sig or len(policy_sig.replace('sha256:', '')) < 10:
-            return jsonify({'error': 'Invalid policy signature'}), 403
-
-        # Attestation requirement: in production, verify enclave attestation here
-        if REQUIRE_ATTESTATION and APP_ENV == 'prod':
-            # Placeholder: enforce attestation flag
-            pass
-
-        # Success: return decision token placeholder (mock ALLOW)
-        decision = {
-            'action': 'ALLOW',
-            'tenant_id': tenant_id,
-            'request_id': req_id,
-            'policy_signature': policy_sig,
-            'audit_event_id': f'audit-{int(time.time())}',
-            'risk_score': 0.0,
-            'reasons': []
-        }
-        return jsonify({'decision': 'ALLOW', 'agentshield': decision}), 200
-
-    @app.route('/v1/enforce-blind', methods=['POST'])
-    def enforce_blind():
-        """
-        Blind enforcement endpoint used by Vigil. Validates policy signature and payload shape,
-        and returns an encrypted result. No plaintext is ever accessed here (mock implementation).
-        """
-        try:
-            data = request.get_json(force=True)
-        except Exception:
-            return jsonify({'error': 'Invalid JSON'}), 400
-
-        payload = (data or {}).get('payload') or {}
-        if not isinstance(payload, dict) or not payload.get('ciphertext'):
-            return jsonify({'error': 'Missing ciphertext'}), 400
-
-        # Header policy signature validation (mock)
-        policy_sig = request.headers.get('X-Policy-Signature')
-        if not policy_sig or len(policy_sig.replace('sha256:', '')) < 10:
-            return jsonify({'error': 'Invalid policy signature'}), 403
-
-        # Mock: Echo back encrypted payload as "result" to simulate pass-through
-        result = {
-            'version': payload.get('version', 1),
-            'ciphertext': payload.get('ciphertext'),
-            'iv': payload.get('iv'),
-            'tag': payload.get('tag'),
-            'processed_at': datetime.utcnow().isoformat()
-        }
-        return jsonify(result), 200
         
     except Exception as e:
         logger.error(f"Attestation verification error: {str(e)}")
         return jsonify({'error': 'Verification failed', 'details': str(e)}), 500
+
+
+@app.route('/api/v1/blind-execute', methods=['POST'])
+def blind_execute():
+    """
+    Blind execution entrypoint. Validates policy_signature and envelope shape.
+    NEVER inspects plaintext. Rejects immediately if policy hash mismatch.
+
+    Expected JSON:
+    {
+      "request_id": "uuid",
+      "tenant_id": "cust-...",
+      "user_id": "alice@...",
+      "policy_signature": "sha256:...",
+      "payload": {"version": 1, "ciphertext": "...", "iv": "...", "tag": "..."}
+    }
+    """
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({'error': 'Invalid JSON'}), 400
+
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid body'}), 400
+
+    req_id = data.get('request_id')
+    tenant_id = data.get('tenant_id')
+    policy_sig = data.get('policy_signature')
+    payload = data.get('payload') or {}
+
+    # Basic envelope checks
+    required_fields = ['version', 'ciphertext', 'iv', 'tag']
+    if not all(field in payload for field in required_fields):
+        return jsonify({'error': 'Invalid envelope'}), 400
+
+    # Verify policy signature/hash (mock): require non-empty and sha256-like length
+    if not policy_sig or len(policy_sig.replace('sha256:', '')) < 10:
+        return jsonify({'error': 'Invalid policy signature'}), 403
+
+    # Attestation requirement: in production, verify enclave attestation here
+    if REQUIRE_ATTESTATION and APP_ENV == 'prod':
+        # Placeholder: enforce attestation flag
+        pass
+
+    # Success: return decision token placeholder (mock ALLOW)
+    decision = {
+        'action': 'ALLOW',
+        'tenant_id': tenant_id,
+        'request_id': req_id,
+        'policy_signature': policy_sig,
+        'audit_event_id': f'audit-{int(time.time())}',
+        'risk_score': 0.0,
+        'reasons': []
+    }
+    return jsonify({'decision': 'ALLOW', 'agentshield': decision}), 200
+
+@app.route('/v1/enforce', methods=['POST'])
+def enforce():
+    """
+    Standard enforcement endpoint with plaintext evaluation.
+    Evaluates messages against policy rules and returns signed decision.
+    """
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({'error': 'Invalid JSON'}), 400
+
+    # Extract request fields
+    request_id = data.get('request_id', str(uuid.uuid4()))
+    tenant_id = data.get('tenant_id', 'default')
+    agent_id = data.get('agent_id', 'unknown')
+    policy_id = data.get('policy_id', 'default-policy')
+    policy_version = data.get('policy_version', 1)
+    messages = data.get('messages', [])
+    environment = data.get('environment', 'production')
+    input_hash = data.get('input_hash', '')
+    timestamp_ms = data.get('timestamp_ms', int(time.time() * 1000))
+
+    # Simple pattern-based policy evaluation
+    all_text = ' '.join([msg.get('content', '') for msg in messages])
+    
+    # Default ALLOW
+    action = 'ALLOW'
+    risk_score = 0.05
+    reasons = ['clean']
+    
+    # Check for threats (simple pattern matching)
+    import re
+    if re.search(r'(?i)system:', all_text):
+        action = 'BLOCK'
+        risk_score = 0.95
+        reasons = ['prompt-injection-system']
+    elif re.search(r'(?i)ignore previous', all_text):
+        action = 'BLOCK'
+        risk_score = 0.95
+        reasons = ['prompt-injection-override']
+    elif re.search(r'\b[0-9]{13,19}\b', all_text):
+        action = 'BLOCK'
+        risk_score = 0.99
+        reasons = ['credit-card-number']
+    elif re.search(r'\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b', all_text):
+        action = 'BLOCK'
+        risk_score = 0.99
+        reasons = ['ssn-pattern']
+    elif re.search(r'(?i)<script>', all_text):
+        action = 'BLOCK'
+        risk_score = 0.98
+        reasons = ['xss-attempt']
+    elif re.search(r'(?i)DROP\s+TABLE', all_text):
+        action = 'BLOCK'
+        risk_score = 0.98
+        reasons = ['sql-injection']
+
+    # Build decision response
+    result = {
+        'schema_version': 'as_decision_v1',
+        'action': action,
+        'risk_score': risk_score,
+        'reasons': reasons,
+        'issued_at': int(time.time()),
+        'ttl_ms': 300000,
+        'context_echo': {
+            'request_id': request_id,
+            'tenant_id': tenant_id,
+            'agent_id': agent_id,
+            'policy_id': policy_id,
+            'policy_version': policy_version,
+            'environment': environment,
+            'input_hash': input_hash
+        },
+        'audit_event_id': f'evt-{uuid.uuid4()}',
+        'decision_id': str(uuid.uuid4())
+    }
+
+    # Create canonical payload for signing
+    canonical = json.dumps({
+        'request_context': result['context_echo'],
+        'decision': {
+            'action': result['action'],
+            'risk_score': result['risk_score'],
+            'reasons': result['reasons'],
+            'audit_event_id': result['audit_event_id']
+        }
+    }, sort_keys=True, separators=(',', ':'))
+
+    # Sign with Ed25519
+    canonical_bytes = canonical.encode('utf-8')
+    signature = SIGNING_KEY.sign(canonical_bytes)
+    signature_b64 = base64.urlsafe_b64encode(signature).decode('utf-8').rstrip('=')
+
+    # Add signature to response
+    result['signature'] = signature_b64
+    result['signature_key_id'] = KEY_ID
+    result['canonical_payload_hash'] = base64.urlsafe_b64encode(
+        hashlib.sha256(canonical_bytes).digest()
+    ).decode('utf-8').rstrip('=')
+
+    logger.info(f"Signed decision {result['decision_id']} for request {request_id}: {action}")
+    return jsonify(result), 200
+
+@app.route('/v1/enforce-blind', methods=['POST'])
+def enforce_blind():
+    """
+    Blind enforcement endpoint used by Vigil. Validates policy signature and payload shape,
+    and returns a cryptographically signed encrypted result.
+    """
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        return jsonify({'error': 'Invalid JSON'}), 400
+
+    payload = (data or {}).get('payload') or {}
+    if not isinstance(payload, dict) or not payload.get('ciphertext'):
+        return jsonify({'error': 'Missing ciphertext'}), 400
+
+    # Header policy signature validation
+    policy_sig = request.headers.get('X-Policy-Signature')
+    if not policy_sig or len(policy_sig.replace('sha256:', '')) < 10:
+        return jsonify({'error': 'Invalid policy signature'}), 403
+
+    # Extract request context
+    request_id = data.get('request_id', str(uuid.uuid4()))
+    tenant_id = data.get('tenant_id', 'default')
+    agent_id = data.get('agent_id', 'unknown')
+    policy_version = data.get('policy_version', 1)
+    timestamp_ms = data.get('timestamp_ms', int(time.time() * 1000))
+
+    # Build decision response
+    result = {
+        'schema_version': 'as_decision_v1',
+        'action': 'ALLOW',
+        'risk_score': 0.0,
+        'reasons': ['encrypted-payload'],
+        'issued_at': int(time.time()),
+        'ttl_ms': 300000,
+        'context_echo': {
+            'request_id': request_id,
+            'tenant_id': tenant_id,
+            'agent_id': agent_id,
+            'policy_version': policy_version,
+            'policy_signature': policy_sig
+        },
+        'audit_event_id': f'evt-{uuid.uuid4()}',
+        'decision_id': str(uuid.uuid4())
+    }
+
+    # Create canonical payload for signing
+    canonical = json.dumps({
+        'request_context': result['context_echo'],
+        'decision': {
+            'action': result['action'],
+            'risk_score': result['risk_score'],
+            'reasons': result['reasons'],
+            'audit_event_id': result['audit_event_id']
+        }
+    }, sort_keys=True, separators=(',', ':'))
+
+    # Sign with Ed25519
+    canonical_bytes = canonical.encode('utf-8')
+    signature = SIGNING_KEY.sign(canonical_bytes)
+    signature_b64 = base64.urlsafe_b64encode(signature).decode('utf-8').rstrip('=')
+
+    # Add signature to response
+    result['signature'] = signature_b64
+    result['signature_key_id'] = KEY_ID
+    result['canonical_payload_hash'] = base64.urlsafe_b64encode(
+        hashlib.sha256(canonical_bytes).digest()
+    ).decode('utf-8').rstrip('=')
+
+    logger.info(f"Signed decision {result['decision_id']} for request {request_id}")
+    return jsonify(result), 200
 
 
 @app.route('/api/v1/sign-decision', methods=['POST'])
@@ -216,8 +406,9 @@ def sign_decision():
     
     Response:
     {
-        "signature": "ed25519_...",
-        "public_key": "...",
+        "signature": "base64url_encoded_ed25519_sig",
+        "public_key": "base64url_encoded_public_key",
+        "key_id": "...",
         "signed_at": "2024-12-31T23:30:00Z"
     }
     """
@@ -228,17 +419,24 @@ def sign_decision():
             return jsonify({'error': 'No JSON body'}), 400
         
         decision = data.get('decision', {})
-        decision_id = data.get('decision_id', '')
+        decision_id = data.get('decision_id', str(uuid.uuid4()))
         
-        # Generate mock signature
-        decision_json = json.dumps(decision, sort_keys=True)
-        signature_data = f"{decision_json}{MOCK_SIGNING_KEY}{int(time.time())}"
-        signature = hashlib.sha256(signature_data.encode()).hexdigest()
+        # Create canonical payload for signing
+        decision_json = json.dumps(decision, sort_keys=True, separators=(',', ':'))
+        canonical_bytes = decision_json.encode('utf-8')
+        
+        # Sign with Ed25519
+        signature = SIGNING_KEY.sign(canonical_bytes)
+        signature_b64 = base64.urlsafe_b64encode(signature).decode('utf-8').rstrip('=')
         
         result = {
-            'signature': f"ed25519_{signature[:64]}",
-            'public_key': 'mock_public_key_ed25519',
+            'signature': signature_b64,
+            'public_key': PUBLIC_KEY_B64,
+            'key_id': KEY_ID,
             'decision_id': decision_id,
+            'canonical_payload_hash': base64.urlsafe_b64encode(
+                hashlib.sha256(canonical_bytes).digest()
+            ).decode('utf-8').rstrip('='),
             'signed_at': datetime.utcnow().isoformat()
         }
         

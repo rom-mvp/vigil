@@ -1,3 +1,10 @@
+INFO     src.vigil.api_key_auth:api_key_auth.py:54 APIKeyAuth connected to Redis: redis://localhost:6379/0
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:9000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:9000 "GET /v1/policies/rules HTTP/1.1" 404 50
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8443
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8443
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8443
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8443
 INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
 INFO     vigil.clients.agentshield_client:agentshield_client.py:63 AgentShieldClient initialized: base_url=http://localhost:9000, require_signed=True, verify_merkle=True
 DEBUG    vigil.clients.agentshield_client:agentshield_client.py:140 Fetching JWKS: http://localhost:9000/v1/keys/jwks
@@ -22,4 +29,30 @@ ERROR    vigil.clients.agentshield_client:agentshield_client.py:318 Attestation 
 DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
 DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "GET /health HTTP/1.1" 200 105
 DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
-DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "POST /v1/chat/completions HTTP/1.1" 200 513
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "POST /v1/chat/completions HTTP/1.1" 200 516
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:9000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:9000 "GET /health HTTP/1.1" 200 133
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "GET /health HTTP/1.1" 200 105
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:9000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:9000 "POST /v1/enforce HTTP/1.1" 404 43
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "POST /v1/chat/completions HTTP/1.1" 401 47
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "GET /api/v1/audit/logs?limit=5 HTTP/1.1" 404 207
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "POST /v1/chat/completions HTTP/1.1" 401 47
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "GET /api/v1/audit/logs?limit=1&tenant_id=sig-test-tenant HTTP/1.1" 404 207
+DEBUG    urllib3.connectionpool:connectionpool.py:241 Starting new HTTP connection (1): localhost:8000
+DEBUG    urllib3.connectionpool:connectionpool.py:544 http://localhost:8000 "POST /v1/chat/completions HTTP/1.1" 401 47
+WARNING  src.vigil.local_server:local_server.py:766 Plaintext deprecated: forwarding in migration mode
+WARNING  src.vigil.local_server:local_server.py:766 Plaintext deprecated: forwarding in migration mode
+INFO     vigil.tee_integration:tee_integration.py:70 Initializing TEEIntegration: TEEConfig(enabled=True, type=auto, mode=http)
+INFO     vigil.tee_integration:tee_integration.py:82 ✓ TEE Attestation Client initialized: TEEType.NONE
+INFO     vigil.tee_integration:tee_integration.py:85 ✓ Key Sealer initialized
+INFO     vigil.tee_integration:tee_integration.py:120 Generated fresh attestation quote (type: none)
+INFO     vigil.tee_integration:tee_integration.py:70 Initializing TEEIntegration: TEEConfig(enabled=True, type=auto, mode=http)
+INFO     vigil.tee_integration:tee_integration.py:82 ✓ TEE Attestation Client initialized: TEEType.NONE
+INFO     vigil.tee_integration:tee_integration.py:85 ✓ Key Sealer initialized
+INFO     vigil.tee_integration:tee_integration.py:120 Generated fresh attestation quote (type: none)

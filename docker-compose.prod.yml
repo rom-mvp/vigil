@@ -57,6 +57,7 @@ services:
     environment:
       # AgentShield Integration (works with both mock and real)
       - AGENTSHIELD_API_URL=http://agentshield:9000
+      - AGENTSHIELD_JWKS_URL=http://agentshield:9000/.well-known/jwks.json
       - AGENTSHIELD_REQUIRE_SIGNED=true
       - AGENTSHIELD_TIMEOUT_MS=5000
       - AGENTSHIELD_API_KEY=                          # Optional, for real backend auth

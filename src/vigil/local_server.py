@@ -123,6 +123,38 @@ def get_public_key():
         return jsonify({"error": "Public key unavailable"}), 503
 
 
+@app.route('/v1/keys/jwks', methods=['GET'])
+def jwks_proxy():
+    """
+    PROXY: Fetches the Ed25519 Signing Keys from the Enclave (AgentShield).
+    Clients need this to verify the signature on the response.
+    """
+    # 1. Check Cache (1 hour TTL)
+    cache = getattr(app, '_jwks_cache', None)
+    now = time.time()
+    if cache and cache.get('expires_at', 0) > now:
+        return jsonify(cache['value'])
+
+    # 2. Fetch from Backend
+    try:
+        # AgentShield URL from env or default
+        backend_url = os.getenv('AGENTSHIELD_URL', 'http://localhost:9000')
+        target_url = f"{backend_url}/.well-known/jwks.json"
+        
+        # 2s Timeout (Fail fast)
+        r = requests.get(target_url, timeout=2.0)
+        r.raise_for_status()
+        data = r.json()
+
+        # 3. Update Cache & Return
+        app._jwks_cache = {"value": data, "expires_at": now + 3600}
+        return jsonify(data)
+
+    except Exception as e:
+        app.logger.error(f"Failed to fetch JWKS from AgentShield: {e}")
+        return jsonify({"error": "Signing keys unavailable"}), 503
+
+
 LOG_SERVER_URL = os.environ.get('LOG_SERVER_URL', 'http://vigil-dashboard:3000/ingest')
 
 # Hardening controls
