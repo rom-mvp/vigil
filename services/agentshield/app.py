@@ -480,7 +480,11 @@ def enforce():
         action = 'BLOCK'
         risk_score = 0.95
         reasons = ['prompt-injection-override']
-    elif _search(r'(?i)DAN\s*mode|ChaosGPT|unfiltered\s+AI|no\s+ethical\s+constraints|ignore\s+all\s+safety', combined_text):
+    elif _search(r'(?i)\b(you\s+are|tu\s+es|du\s+bist|eres(\s+ahora)?|você\s+é|вы|你是)\s+(now\s+|maintenant\s+|ahora\s+)?(DAN|do\s+anything\s+now)', combined_text) or \
+         _search(r'(?i)\b(from\s+now\s+on|à\s+partir\s+de\s+maintenant|von\s+jetzt\s+an|a\s+partir\s+de\s+agora|desde\s+ahora)\b.*\bDAN\b', combined_text) or \
+         _search(r'(?i)\bDAN\s*mode\b|ChaosGPT|unfiltered\s+AI|no\s+ethical\s+constraints|ignore\s+all\s+safety', combined_text) or \
+         _search(r'(?i)\b(broken\s+free|no\s+rules?|no\s+restrictions?|sans\s+règles?|sem\s+regras?|sin\s+reglas?|ohne\s+regeln)\b', combined_text) or \
+         _search(r'(?i)\bpretend\s+you\s+(have\s+no|are|can\s+do\s+anything)', combined_text):
         action = 'BLOCK'
         risk_score = 0.93
         reasons = ['roleplay-jailbreak']
