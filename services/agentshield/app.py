@@ -422,7 +422,7 @@ def enforce():
         or _search(r"(?i)\bdelete\s+all\s+(?:\w+\s+)?(users|data|records|tables)\b", combined_text)
         or _search(r"(?i)\bremove\s+all\s+(?:user\s+)?data\b", combined_text)
         or _search(r"(?i)\b(wipe|erase|purge|clear)\b\s+(?:the\s+)?(database|db|disk|filesystem|logs|data)\b", combined_text)
-        or _search(r"(?i)\b(drop|truncate)\b\s+(?:all\s+)?(tables|schemas)\b", combined_text)
+        or _search(r"(?i)\b(drop|truncate)\b\s+(?:all\s+)?(?:tables?|schemas?|databases?|dbs?)\b", combined_text)
         # Multilingual destructive verbs
         or _search(r"(?i)\b(borrar|eliminar)\b\s+(?:todos\s+los\s+|todas\s+las\s+)?datos?\b", combined_text)  # ES
         or _search(r"(?i)\b(apagar|excluir)\b\s+(?:todos\s+os\s+)?dados?\b", combined_text)  # PT
@@ -438,7 +438,7 @@ def enforce():
         action = 'BLOCK'
         risk_score = 0.95
         reasons = ['prompt-injection-system']
-    elif _search(r'(?i)ignore\s+(?:all\s+)?previous', combined_text):
+    elif _search(r'(?i)ignore\s+(?:all\s+)?(?:previous|instructions|rules|prompts?)', combined_text):
         action = 'BLOCK'
         risk_score = 0.95
         reasons = ['prompt-injection-override']
