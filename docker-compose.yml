@@ -9,6 +9,11 @@ services:
     environment:
       - VIGIL_STRICT_MODE=false
       - VIGIL_ENV=docker
+      - REDIS_URL=redis://vigil-redis:6379/0
+      - VIGIL_PLAINTEXT_MODE=migration
+      - AGENTSHIELD_URL=http://vigil-agentshield:9000
+      - AGENTSHIELD_JWKS_URL=http://vigil-agentshield:9000/.well-known/jwks.json
+      - VIGIL_BYPASS_AGENTSHIELD=true
       - PYTHONPATH=/app/src
       - VIGIL_REDIS_HOST=vigil-redis
       - VIGIL_REDIS_PORT=6379

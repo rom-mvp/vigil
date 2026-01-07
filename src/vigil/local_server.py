@@ -771,6 +771,25 @@ def transparent_proxy():
             "metadata": {"tier": tier}
         }
 
+        # Demo bypass: allow skipping AgentShield for local testing
+        if os.environ.get('VIGIL_BYPASS_AGENTSHIELD', 'false').lower() == 'true':
+            return jsonify({
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "stub allow (AgentShield bypass)"
+                        }
+                    }
+                ],
+                "vigil_metadata": {
+                    "action": "ALLOW",
+                    "bypassed_agentshield": True,
+                    "tenant": tenant_id,
+                    "agent_id": agent_id
+                }
+            }), 200
+
         try:
             agentshield_response = agentshield.enforce(enforcement_req)
             _blind_log(
@@ -796,6 +815,25 @@ def transparent_proxy():
         }), 400
     else:
         logger.warning("Plaintext deprecated: forwarding in migration mode")
+
+    # Demo bypass for plaintext path
+    if os.environ.get('VIGIL_BYPASS_AGENTSHIELD', 'false').lower() == 'true':
+        return jsonify({
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "stub allow (AgentShield bypass)"
+                    }
+                }
+            ],
+            "vigil_metadata": {
+                "action": "ALLOW",
+                "bypassed_agentshield": True,
+                "tenant": tenant_id,
+                "agent_id": body.get('agent_id', 'anonymous-agent')
+            }
+        }), 200
     
     # Note: tenant_id already set from API key validation above
     # In SaaS mode, tenant comes from API key, not headers
