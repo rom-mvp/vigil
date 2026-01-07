@@ -241,19 +241,35 @@ class AgentShieldClient:
         return None
 
     def _get_key_from_jwks(self, key_id: str):
-        jwks = self._fetch_jwks()
-        keys = jwks.get("keys", [])
-        for key_data in keys:
-            if key_data.get("kid") == key_id:
-                kty = key_data.get("kty")
-                if kty == "OKP" and key_data.get("crv") == "Ed25519":
-                    x_b64 = key_data.get("x")
-                    if x_b64:
-                        x_bytes = base64.urlsafe_b64decode(x_b64 + "==")
-                        return ed25519.Ed25519PublicKey.from_public_bytes(x_bytes)
-                elif kty == "RSA":
-                    # Future: decode RSA from JWK if needed
-                    pass
+        """Retrieve a public key from JWKS by kid.
+
+        If the key is not found, force-refresh JWKS once to account for
+        key rotation at AgentShield startup, then retry lookup.
+        """
+        def _lookup() -> Optional[object]:
+            jwks = self._fetch_jwks()
+            keys = jwks.get("keys", [])
+            for key_data in keys:
+                if key_data.get("kid") == key_id:
+                    kty = key_data.get("kty")
+                    if kty == "OKP" and key_data.get("crv") == "Ed25519":
+                        x_b64 = key_data.get("x")
+                        if x_b64:
+                            x_bytes = base64.urlsafe_b64decode(x_b64 + "==")
+                            return ed25519.Ed25519PublicKey.from_public_bytes(x_bytes)
+                    elif kty == "RSA":
+                        # Future: decode RSA from JWK if needed
+                        pass
+            return None
+
+        pub = _lookup()
+        if pub is not None:
+            return pub
+        # Force refresh JWKS cache once on miss
+        if self.jwks_url:
+            self._jwks_cache = None
+            self._jwks_cache_time = 0
+            return _lookup()
         return None
 
     def _start_background_key_refresh(self):
@@ -290,21 +306,22 @@ class AgentShieldClient:
 
     @staticmethod
     def _canonical_payload(enforcement_request: Dict[str, Any], decision: Dict[str, Any]) -> bytes:
+        # Match AgentShield canonical payload used for signing
         payload = {
             "request_context": {
                 "request_id": enforcement_request.get("request_id"),
                 "tenant_id": enforcement_request.get("tenant_id"),
                 "agent_id": enforcement_request.get("agent_id"),
+                "policy_id": enforcement_request.get("policy_id"),
                 "policy_version": enforcement_request.get("policy_version"),
                 "environment": enforcement_request.get("environment"),
+                "input_hash": enforcement_request.get("input_hash"),
             },
             "decision": {
                 "action": decision.get("action"),
                 "risk_score": decision.get("risk_score"),
                 "reasons": decision.get("reasons"),
                 "audit_event_id": decision.get("audit_event_id"),
-                "signature_hash": decision.get("signature_hash"),
-                "sanitized": decision.get("sanitized"),
             },
         }
         return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -434,19 +451,17 @@ class AgentShieldClient:
         # 6. Verify signature based on key type
         try:
             if isinstance(pubkey, ed25519.Ed25519PublicKey):
-                # Ed25519: verify against canonical_payload_hash if provided, else canonical payload
+                # Ed25519: server signs canonical payload bytes
                 canonical_hash = decision.get("canonical_payload_hash")
                 if canonical_hash:
-                    # TEE.fail: Verify the provided hash matches current state
+                    # Verify the provided hash matches current state
                     provided_hash = base64.urlsafe_b64decode(canonical_hash + "==")
                     if provided_hash != current_canonical_hash:
                         error = ValueError("TEE.fail: Decision payload tampered (hash mismatch)")
                         error.vigil_error_code = VigilErrorCode.SIGNATURE_INVALID
                         raise error
-                    message = provided_hash
-                else:
-                    message = current_canonical_hash
-                pubkey.verify(signature, message)
+                # Verify signature against canonical payload bytes
+                pubkey.verify(signature, current_canonical)
             elif isinstance(pubkey, rsa.RSAPublicKey):
                 # RSA: verify against canonical payload
                 payload = current_canonical
@@ -529,7 +544,8 @@ class AgentShieldClient:
         if isinstance(enforcement_request.get("payload"), dict) and enforcement_request["payload"].get("ciphertext"):
             url = f"{self.base_url}/v1/enforce-blind"
         else:
-            url = f"{self.base_url}/v1/enforce_token"
+            # Plaintext enforcement uses the standard endpoint
+            url = f"{self.base_url}/v1/enforce"
         cert = None
         if self.mtls_cert and self.mtls_key:
             cert = (self.mtls_cert, self.mtls_key)

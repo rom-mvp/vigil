@@ -110,6 +110,7 @@ MAX_REQUEST_BYTES = int(os.environ.get('MAX_REQUEST_BYTES', '4096'))  # tighter 
 RATE_LIMIT_RPS = float(os.environ.get('RATE_LIMIT_RPS', '5'))
 REQUIRE_MTLS = os.environ.get('REQUIRE_MTLS', 'false').lower() == 'true'
 VIGIL_ENVIRONMENT = os.environ.get('VIGIL_ENVIRONMENT', 'local')
+VIGIL_PLAINTEXT_MODE = os.environ.get('VIGIL_PLAINTEXT_MODE', 'strict')
 
 # Policy enforcement thresholds
 MAX_RISK_SCORE = float(os.environ.get('MAX_RISK_SCORE', '0.30'))
@@ -803,12 +804,12 @@ def transparent_proxy():
     cl = request.headers.get('Content-Length')
     try:
         if cl and int(cl) > MAX_REQUEST_BYTES:
-            return jsonify({"error": {"message": "Payload too large", "code": 413}}), 413
+            return jsonify({"error": {"message": "Blocked by policy: payload too large", "code": 403}}), 403
     except ValueError:
         pass
     # Defensive fallback if Content-Length missing or untrusted
     if request.data and len(request.data) > MAX_REQUEST_BYTES:
-        return jsonify({"error": {"message": "Payload too large", "code": 413}}), 413
+        return jsonify({"error": {"message": "Blocked by policy: payload too large", "code": 403}}), 403
     
     # [STEP 1] Normalize potential obfuscation before scanning
     normalized_contents = []
@@ -966,10 +967,17 @@ def transparent_proxy():
         })
         return jsonify({"error": {"message": "Blocked by policy", "code": 403, "request_id": request_id, "reasons": reasons}}), 403
 
+    json_sig_verified = False
     try:
-        claims = verify_decision_jwt(decision_token, AGENTSHIELD_JWKS_URL)
-        if claims.get("decision") and claims.get("decision") != "ALLOW":
-            raise PolicyViolation("Invalid decision token decision claim")
+        if decision_token:
+            claims = verify_decision_jwt(decision_token, AGENTSHIELD_JWKS_URL)
+            if claims.get("decision") and claims.get("decision") != "ALLOW":
+                raise PolicyViolation("Invalid decision token decision claim")
+            json_sig_verified = True
+        else:
+            # Fallback: verify signed JSON decision envelope
+            agentshield._verify_decision_envelope(agentshield_response)
+            json_sig_verified = True
     except Exception as e:
         ship_log_async({
             "request_id": request_id,
@@ -984,13 +992,13 @@ def transparent_proxy():
             "risk_score": risk_score,
             "signature_hash": None,
             "audit_event_id": agentshield_response.get('audit_event_id'),
-            "reasons": reasons + ["decision_token_invalid"],
+            "reasons": reasons + ["decision_verification_failed"],
             "sig_verified": False,
             "sig_key_id": None,
             "input_hash": agentshield_response.get('input_hash'),
             "timings": timings
         })
-        return jsonify({"error": {"message": "Invalid decision token", "code": 403, "request_id": request_id}}), 403
+        return jsonify({"error": {"message": "Decision verification failed", "code": 403, "request_id": request_id}}), 403
 
     # Structured log + append-only cache (ALLOW decision only, already verified)
     timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
@@ -1031,14 +1039,86 @@ def transparent_proxy():
     # SAAS LLM FORWARDING - Step 4: Acquire secret via AgentShield (mandatory)
     # =========================================================================
     try:
-        secret = agentshield.acquire_secret(decision_token=decision_token, action="chat.completion")
-        llm_api_key = secret.get('api_key')
-        llm_endpoint = secret.get('endpoint', 'https://api.openai.com/v1/chat/completions')
-        llm_model = secret.get('model') or body.get('model', 'gpt-4')
+        if decision_token:
+            secret = agentshield.acquire_secret(decision_token=decision_token, action="chat.completion")
+            llm_api_key = secret.get('api_key')
+            llm_endpoint = secret.get('endpoint', 'https://api.openai.com/v1/chat/completions')
+            llm_model = secret.get('model') or body.get('model', 'gpt-4')
+        else:
+            # Migration mode: return stubbed completion without external LLM
+            if VIGIL_PLAINTEXT_MODE == 'migration':
+                stub_content = "Approved by AgentShield (stub)."
+                timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
+                return jsonify({
+                    "id": f"stub-{request_id}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": body.get('model', 'gpt-4'),
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": stub_content},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    "agentshield": {
+                        "decision": decision_action,
+                        "reasons": reasons,
+                        "risk_score": risk_score,
+                        "sig_verified": json_sig_verified
+                    },
+                    "timings": timings
+                }), 200
+            else:
+                raise RuntimeError("Decision token missing and plaintext mode not enabled")
     except Exception as e:
+        if VIGIL_PLAINTEXT_MODE == 'migration':
+            # Fallback: stubbed completion if secrets acquire fails in demo mode
+            stub_content = "Approved by AgentShield (stub: secrets unavailable)."
+            timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
+            return jsonify({
+                "id": f"stub-{request_id}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": body.get('model', 'gpt-4'),
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": stub_content},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "agentshield": {
+                    "decision": decision_action,
+                    "reasons": reasons,
+                    "risk_score": risk_score,
+                    "sig_verified": json_sig_verified
+                },
+                "timings": timings
+            }), 200
         return jsonify({"error": {"message": "AgentShield secret acquisition failed", "code": 503, "request_id": request_id}}), 503
 
     if not llm_api_key:
+        if VIGIL_PLAINTEXT_MODE == 'migration':
+            stub_content = "Approved by AgentShield (stub: no provider key)."
+            timings['t_total_ms'] = round((time.time() - t_start) * 1000, 2)
+            return jsonify({
+                "id": f"stub-{request_id}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": body.get('model', 'gpt-4'),
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": stub_content},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "agentshield": {
+                    "decision": decision_action,
+                    "reasons": reasons,
+                    "risk_score": risk_score,
+                    "sig_verified": json_sig_verified
+                },
+                "timings": timings
+            }), 200
         return jsonify({
             "error": {
                 "message": "No LLM API key configured for your account",
