@@ -167,6 +167,8 @@ VIGIL_STRICT_MODE = os.environ.get('VIGIL_STRICT_MODE', '0')
 if VIGIL_STRICT_MODE == '1':
     PLAINTEXT_MODE = 'strict'
 POLICY_PATH = os.environ.get('POLICY_PATH', os.path.join(os.getcwd(), 'policies', 'policy.rego'))
+MAX_RISK_SCORE = float(os.environ.get('MAX_RISK_SCORE', '0.30'))
+DISALLOWED_REASONS = set(os.environ.get('DISALLOWED_REASONS', 'credential-exfil,tenant-boundary,privilege-escalation').split(','))
 
 AGENTSHIELD_TIMEOUT_SEC = float(os.environ.get('AGENTSHIELD_TIMEOUT_MS', '1000')) / 1000.0  # Reduced to 1000ms
 
@@ -730,12 +732,12 @@ def transparent_proxy():
     cl = request.headers.get('Content-Length')
     try:
         if cl and int(cl) > MAX_REQUEST_BYTES:
-            return jsonify({"error": {"message": "Payload too large", "code": 413}}), 413
+            return jsonify({"error": {"message": "Blocked by policy: payload too large", "code": 403}}), 403
     except ValueError:
         pass
     # Defensive fallback if Content-Length missing or untrusted
     if request.data and len(request.data) > MAX_REQUEST_BYTES:
-        return jsonify({"error": {"message": "Payload too large", "code": 413}}), 413
+        return jsonify({"error": {"message": "Blocked by policy: payload too large", "code": 403}}), 403
     
     # Blind Router path: detect encrypted envelope
     is_blind = (
@@ -877,7 +879,7 @@ def transparent_proxy():
             return cached_response  # Return cached result for same idempotency key
     
     # Blind envelope: Vigil forwards opaque payload only
-    envelope = body.get('payload') or {}
+    # Plaintext enforcement: forward messages to AgentShield
     enforcement_req = {
         "request_id": request_id,
         "tenant_id": tenant_id,
@@ -887,12 +889,7 @@ def transparent_proxy():
         "policy_version": policy_version,
         "policy_signature": policy_hash,
         "environment": VIGIL_ENVIRONMENT,
-        "payload": {
-            "version": envelope.get('version', 1),
-            "ciphertext": envelope.get('ciphertext'),
-            "iv": envelope.get('iv'),
-            "tag": envelope.get('tag')
-        },
+        "messages": body.get('messages', []),
         "metadata": {"tier": tier}
         # Note: timestamp_ms, ttl_ms, and input_hash added by AgentShieldClient
     }
@@ -969,35 +966,42 @@ def transparent_proxy():
             })
         return jsonify({"error": {"message": "Blocked by policy", "code": 403, "request_id": request_id, "reasons": reasons}}), 403
 
-    try:
-        claims = verify_decision_jwt(decision_token, AGENTSHIELD_JWKS_URL)
-        if claims.get("decision") and claims.get("decision") != "ALLOW":
-            raise PolicyViolation("Invalid decision token decision claim")
-    except Exception as e:
-        if "ship_log_async" in globals():
-            ship_log_async({
-                "request_id": request_id,
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-                "seq_id": _seq_id,
-                "status": "BLOCK",
-                "agent_id": agent_id,
-                "tenant_id": tenant_id,
-                "policy_id": policy_id,
-                "policy_version": policy_version,
-                "environment": VIGIL_ENVIRONMENT,
-                "risk_score": risk_score,
-                "signature_hash": None,
-                "audit_event_id": agentshield_response.get('audit_event_id'),
-                "reasons": reasons + ["decision_token_invalid"],
-                "sig_verified": False,
-                "sig_key_id": None,
-                "input_hash": agentshield_response.get('input_hash'),
-                "timings": timings
-            })
-        return jsonify({"error": {"message": "Invalid decision token", "code": 403, "request_id": request_id}}), 403
+    # Verify decision: prefer JWT; fallback to signed JSON
+    decision = None
+    if decision_token:
+        try:
+            claims = verify_decision_jwt(decision_token, AGENTSHIELD_JWKS_URL)
+            if claims.get("decision") and claims.get("decision") != "ALLOW":
+                raise PolicyViolation("Invalid decision token decision claim")
+            decision = claims
+        except Exception:
+            if "ship_log_async" in globals():
+                ship_log_async({
+                    "request_id": request_id,
+                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                    "seq_id": _seq_id,
+                    "status": "BLOCK",
+                    "agent_id": agent_id,
+                    "tenant_id": tenant_id,
+                    "policy_id": policy_id,
+                    "policy_version": policy_version,
+                    "environment": VIGIL_ENVIRONMENT,
+                    "risk_score": risk_score,
+                    "signature_hash": None,
+                    "audit_event_id": agentshield_response.get('audit_event_id'),
+                    "reasons": reasons + ["decision_token_invalid"],
+                    "sig_verified": False,
+                    "sig_key_id": None,
+                    "input_hash": agentshield_response.get('input_hash'),
+                    "timings": timings
+                })
+            return jsonify({"error": {"message": "Invalid decision token", "code": 403, "request_id": request_id}}), 403
+    else:
+        # Fallback: use signed JSON decision from AgentShieldClient
+        decision = agentshield_response
 
-    # Enforce AgentShield decision (claims are already verified)
-    decision = claims or {}
+    # Enforce AgentShield decision (either verified JWT claims or signed JSON)
+    decision = decision or {}
     action = decision.get('action', decision_action)
     risk_score = decision.get('risk_score', risk_score)
     signature_hash = decision.get('signature_hash', agentshield_response.get('decision_hash'))
